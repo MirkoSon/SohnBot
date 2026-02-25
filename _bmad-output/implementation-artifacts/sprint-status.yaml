@@ -1,0 +1,93 @@
+# generated: 2026-02-25
+# project: SohnBot
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: E:\GIT\SohnBot\_bmad-output\implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-02-25
+project: SohnBot
+project_key: NOKEY
+tracking_system: file-system
+story_location: E:\GIT\SohnBot\_bmad-output\implementation-artifacts
+
+development_status:
+  epic-1: in-progress
+  1-1-project-setup-configuration-system: review
+  1-2-sqlite-persistence-layer-broker-foundation: backlog
+  1-3-telegram-gateway-claude-agent-sdk-integration: backlog
+  1-4-scope-validation-path-traversal-prevention: backlog
+  1-5-file-read-operations-list-read-search: backlog
+  1-6-patch-based-file-edit-with-snapshot-creation: backlog
+  1-7-rollback-to-previous-snapshot: backlog
+  1-8-structured-operation-logging-notifications: backlog
+  1-9-ambiguous-request-postponement: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-git-status-diff-queries: backlog
+  2-2-git-checkout-for-rollback-operations: backlog
+  2-3-autonomous-git-commits: backlog
+  2-4-enhanced-snapshot-branch-management: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-runtime-status-snapshot-collection: backlog
+  3-2-health-checks-implementation: backlog
+  3-3-system-status-via-telegram: backlog
+  3-4-health-checks-via-telegram: backlog
+  3-5-local-http-observability-server: backlog
+  3-6-html-status-page: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-job-creation-persistence: backlog
+  4-2-idempotent-job-execution-with-catch-up: backlog
+  4-3-timezone-aware-scheduling-with-dst-handling: backlog
+  4-4-job-timeout-enforcement: backlog
+  4-5-job-management-commands: backlog
+  4-6-daily-heartbeat-system: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-lint-project-profile: backlog
+  5-2-build-project-profile: backlog
+  5-3-run-tests-profile: backlog
+  5-4-ripgrep-search-profile: backlog
+  5-5-profile-chaining-limit-dry-run-mode: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-brave-web-search-integration: backlog
+  6-2-search-result-caching: backlog
+  6-3-search-volume-monitoring: backlog
+  6-4-query-operation-logs: backlog
+  epic-6-retrospective: optional

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(cat:*)",
+      "Bash(python:*)",
+      "Bash(py:*)",
+      "Bash(cd E:\\\\GIT\\\\SohnBot:*)",
+      "Bash(echo Poetry not installed:*)",
+      "Bash(tail:*)"
+    ]
+  }
+}
