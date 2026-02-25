@@ -1,0 +1,89 @@
+# SohnBot Default Configuration
+# ==============================
+# This file contains default configuration values that seed the system.
+#
+# Configuration Tiers:
+# - Static (restart required): Scope roots, database path, API keys, logging paths
+# - Dynamic (hot-reloadable): Thresholds, timeouts, retention periods, model settings
+#
+# Precedence:
+# - Static: code defaults < this file < environment variables
+# - Dynamic: code defaults < this file (seed) < SQLite (authoritative)
+#
+# Secrets (NEVER put secrets in this file!):
+# - ANTHROPIC_API_KEY - Environment variable only
+# - TELEGRAM_BOT_TOKEN - Environment variable only
+# - BRAVE_API_KEY - Environment variable only
+
+[scope]
+# File operation scope boundaries (STATIC - restart required)
+allowed_roots = ["~/Projects", "~/Notes"]
+
+[database]
+# Database configuration (STATIC - restart required)
+path = "data/sohnbot.db"
+wal_mode = true
+
+[logging]
+# Logging configuration (file_path STATIC, others DYNAMIC)
+file_path = "data/sohnbot.log"
+level = "INFO"
+retention_days = 90
+
+[telegram]
+# Telegram bot configuration (STATIC allowed_chat_ids, DYNAMIC timeouts)
+# Chat IDs that are authorized to use the bot (empty = no restrictions for development)
+allowed_chat_ids = []
+response_timeout_seconds = 30
+
+[files]
+# File operation limits (DYNAMIC - hot-reloadable)
+max_size_mb = 10
+patch_max_size_kb = 50
+search_timeout_seconds = 5
+
+[git]
+# Git operation configuration (DYNAMIC - hot-reloadable)
+snapshot_retention_days = 30
+operation_timeout_seconds = 10
+
+[scheduler]
+# Scheduler configuration (DYNAMIC - hot-reloadable)
+tick_seconds = 60
+max_concurrent_jobs = 3
+job_timeout_seconds = 600
+
+[commands]
+# Command profile timeouts (DYNAMIC - hot-reloadable)
+lint_timeout_seconds = 60
+build_timeout_seconds = 300
+test_timeout_seconds = 600
+max_chain_length = 5
+
+[search]
+# Web search configuration (DYNAMIC - hot-reloadable)
+cache_retention_days = 7
+volume_alert_threshold = 100
+
+[observability]
+# Observability server configuration (STATIC binding, DYNAMIC settings)
+http_enabled = true
+http_port = 8080
+http_host = "127.0.0.1"  # MUST be localhost (security invariant)
+refresh_seconds = 5
+
+[models]
+# Model routing configuration (DYNAMIC - hot-reloadable)
+telegram_default = "claude-haiku-4-5-20251001"
+dev_default = "claude-sonnet-4-6"
+plan_default = "claude-opus-4-6"
+
+[runtime]
+# Runtime controls (DYNAMIC - hot-reloadable)
+telegram_max_thinking_tokens = 4000
+dev_max_thinking_tokens = 8000
+plan_max_thinking_tokens = 16000
+telegram_max_turns = 10
+dev_max_turns = 25
+plan_max_turns = 50
+plan_max_budget_usd = 5.00
