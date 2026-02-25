@@ -1,13 +1,8 @@
 """Unit tests for configuration registry."""
 
 import pytest
-import sys
-from pathlib import Path
 
-# Add config directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "config"))
-
-from registry import (
+from src.sohnbot.config.registry import (
     ConfigKey,
     REGISTRY,
     get_config_key,

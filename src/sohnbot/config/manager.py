@@ -25,10 +25,8 @@ except ImportError:
 from dotenv import load_dotenv
 import structlog
 
-# Import registry (Note: Using relative import since we're in same package)
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "config"))
-from registry import (  # type: ignore
+# Import registry using proper relative import
+from .registry import (
     REGISTRY,
     get_config_key,
     validate_config_value,
@@ -38,6 +36,32 @@ from registry import (  # type: ignore
 )
 
 logger = structlog.get_logger()
+
+
+# Secret keys that should never be logged
+SENSITIVE_KEYS = {
+    "anthropic_api_key",
+    "telegram_bot_token",
+    "brave_api_key",
+}
+
+
+def _redact_sensitive_value(key: str, value: Any) -> Any:
+    """Redact sensitive configuration values for logging.
+
+    Args:
+        key: Configuration key
+        value: Configuration value
+
+    Returns:
+        Original value if not sensitive, otherwise "[REDACTED]"
+    """
+    # Check if key contains any sensitive keywords
+    key_lower = key.lower()
+    for sensitive_key in SENSITIVE_KEYS:
+        if sensitive_key in key_lower:
+            return "[REDACTED]"
+    return value
 
 
 class ConfigManager:
@@ -84,8 +108,11 @@ class ConfigManager:
             Dictionary of static configuration key-value pairs
 
         Raises:
-            FileNotFoundError: If config file doesn't exist
             ValueError: If configuration validation fails
+
+        Note:
+            If config file doesn't exist, defaults are used with a warning.
+            This allows the system to start with sensible defaults.
         """
         logger.info("loading_static_config", config_file=str(self.config_file))
 
@@ -232,9 +259,17 @@ class ConfigManager:
         old_value = self.dynamic_config.get(key)
         self.dynamic_config[key] = value
 
-        logger.info("dynamic_config_updated", key=key, old_value=old_value, new_value=value)
+        # Log with redaction for sensitive values
+        logger.info("dynamic_config_updated",
+                   key=key,
+                   old_value=_redact_sensitive_value(key, old_value),
+                   new_value=_redact_sensitive_value(key, value))
 
-        # TODO (Story 1.2): Persist to SQLite database
+        # NOTE: Database persistence not yet implemented
+        # DEPENDENCY: Story 1.2 will create config table and implement persistence here
+        # IMPACT: Dynamic config changes are in-memory only and lost on restart until Story 1.2
+        # TODO (Story 1.2): Add database persistence with:
+        #   await self._persist_to_database(key, value)
 
         # Notify subscribers
         await self._notify_subscribers(key, value)
