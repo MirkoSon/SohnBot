@@ -46,7 +46,7 @@ development_status:
   1-3-telegram-gateway-claude-agent-sdk-integration: done
   1-4-scope-validation-path-traversal-prevention: done
   1-5-file-read-operations-list-read-search: done
-  1-6-patch-based-file-edit-with-snapshot-creation: backlog
+  1-6-patch-based-file-edit-with-snapshot-creation: ready-for-dev
   1-7-rollback-to-previous-snapshot: backlog
   1-8-structured-operation-logging-notifications: backlog
   1-9-ambiguous-request-postponement: backlog
