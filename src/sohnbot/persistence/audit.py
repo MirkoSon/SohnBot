@@ -43,24 +43,31 @@ async def log_operation_start(
     db = await get_db()
 
     # Insert operation start record
-    await db.execute(
-        """
-        INSERT INTO execution_log (
-            operation_id, timestamp, capability, action, chat_id, tier, status, file_paths
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            operation_id,
-            int(datetime.now().timestamp()),
-            capability,
-            action,
-            chat_id,
-            tier,
-            "in_progress",
-            file_paths_json,
-        ),
-    )
-    await db.commit()
+    try:
+        await db.execute(
+            """
+            INSERT INTO execution_log (
+                operation_id, timestamp, capability, action, chat_id, tier, status, file_paths
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                operation_id,
+                int(datetime.now().timestamp()),
+                capability,
+                action,
+                chat_id,
+                tier,
+                "in_progress",
+                file_paths_json,
+            ),
+        )
+        await db.commit()
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to log operation start. "
+            f"Ensure database migrations have been applied (run scripts/migrate.py). "
+            f"Original error: {e}"
+        ) from e
 
     # Structured logging
     logger.info(
@@ -97,15 +104,22 @@ async def log_operation_end(
     db = await get_db()
 
     # Update operation record
-    await db.execute(
-        """
-        UPDATE execution_log
-        SET status = ?, snapshot_ref = ?, duration_ms = ?, error_details = ?
-        WHERE operation_id = ?
-        """,
-        (status, snapshot_ref, duration_ms, error_details_json, operation_id),
-    )
-    await db.commit()
+    try:
+        await db.execute(
+            """
+            UPDATE execution_log
+            SET status = ?, snapshot_ref = ?, duration_ms = ?, error_details = ?
+            WHERE operation_id = ?
+            """,
+            (status, snapshot_ref, duration_ms, error_details_json, operation_id),
+        )
+        await db.commit()
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to log operation end. "
+            f"Ensure database migrations have been applied (run scripts/migrate.py). "
+            f"Original error: {e}"
+        ) from e
 
     # Structured logging
     if status == "completed":

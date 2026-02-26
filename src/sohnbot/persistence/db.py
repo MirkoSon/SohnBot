@@ -41,31 +41,36 @@ class DatabaseManager:
         # Create connection
         conn = await aiosqlite.connect(str(self.db_path))
 
-        # Configure pragmas for optimal performance and safety
-        await conn.execute("PRAGMA foreign_keys=ON")
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA synchronous=NORMAL")
-        await conn.execute("PRAGMA busy_timeout=5000")
-        await conn.execute("PRAGMA temp_store=MEMORY")
-        await conn.execute("PRAGMA cache_size=-64000")
+        try:
+            # Configure pragmas for optimal performance and safety
+            await conn.execute("PRAGMA foreign_keys=ON")
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA synchronous=NORMAL")
+            await conn.execute("PRAGMA busy_timeout=5000")
+            await conn.execute("PRAGMA temp_store=MEMORY")
+            await conn.execute("PRAGMA cache_size=-64000")
 
-        # Verify WAL mode was enabled
-        cursor = await conn.execute("PRAGMA journal_mode")
-        mode = await cursor.fetchone()
-        await cursor.close()
+            # Verify WAL mode was enabled
+            cursor = await conn.execute("PRAGMA journal_mode")
+            mode = await cursor.fetchone()
+            await cursor.close()
 
-        if mode[0].lower() != 'wal':
-            logger.warning(
-                "wal_mode_not_enabled",
-                expected="wal",
-                actual=mode[0]
-            )
-        else:
-            logger.info(
-                "database_connection_established",
-                db_path=str(self.db_path),
-                journal_mode=mode[0]
-            )
+            if mode[0].lower() != 'wal':
+                await conn.close()
+                raise RuntimeError(
+                    f"Failed to enable WAL mode. Expected 'wal', got '{mode[0]}'. "
+                    "WAL mode is required for safe concurrent access."
+                )
+        except Exception:
+            # Clean up connection on any pragma configuration failure
+            await conn.close()
+            raise
+
+        logger.info(
+            "database_connection_established",
+            db_path=str(self.db_path),
+            journal_mode=mode[0]
+        )
 
         # Cache connection for reuse
         self._connection = conn
@@ -73,9 +78,9 @@ class DatabaseManager:
 
     async def init_db(self) -> None:
         """
-        Initialize database with migrations.
+        Initialize database by creating schema_migrations table.
 
-        Creates database file and applies all pending migrations.
+        Note: Does NOT apply migrations. Use migrate.py script for that.
         """
         conn = await self.get_connection()
 

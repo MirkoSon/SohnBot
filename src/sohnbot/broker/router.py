@@ -75,20 +75,30 @@ class BrokerRouter:
         tier = classify_tier(capability, action, file_count)
 
         # 3. Validate scope (if file operation)
-        if capability == "fs" and "path" in params:
-            is_valid, error_msg = self.scope_validator.validate_path(params["path"])
-            if not is_valid:
-                return BrokerResult(
-                    allowed=False,
-                    operation_id=operation_id,
-                    tier=tier,
-                    error={
-                        "code": "scope_violation",
-                        "message": error_msg,
-                        "details": {"path": params["path"]},
-                        "retryable": False,
-                    },
-                )
+        if capability == "fs":
+            # Check both singular 'path' and plural 'paths'
+            paths_to_validate = []
+            if "path" in params:
+                paths_to_validate.append(params["path"])
+            if "paths" in params and isinstance(params["paths"], list):
+                paths_to_validate.extend(params["paths"])
+
+            for path in paths_to_validate:
+                is_valid, error_msg = self.scope_validator.validate_path(path)
+                if not is_valid:
+                    # Clean up operation start time to prevent memory leak
+                    del self._operation_start_times[operation_id]
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "scope_violation",
+                            "message": error_msg,
+                            "details": {"path": path},
+                            "retryable": False,
+                        },
+                    )
 
         # 4. Check limits (e.g., max command profiles per request)
         # TODO: Implement limit checking (Story 1.5+)

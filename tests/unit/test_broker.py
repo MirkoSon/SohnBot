@@ -67,20 +67,20 @@ def test_validate_path_tilde_expansion(tmp_path):
 
 
 def test_validate_path_relative_to_absolute(tmp_path):
-    """Relative paths should be normalized to absolute."""
+    """Relative paths should be normalized to absolute and checked against scope."""
     allowed_root = tmp_path / "projects"
     allowed_root.mkdir()
 
     validator = ScopeValidator([str(allowed_root)])
 
-    # Use relative path (should be normalized)
+    # Use relative path (should be normalized to CWD, which is NOT in allowed_root)
     relative_path = "file.txt"
 
     is_valid, error = validator.validate_path(relative_path)
 
-    # Will fail because relative path resolves to CWD, not allowed root
-    # This validates normalization is happening
-    assert is_valid is False or is_valid is True  # Depends on CWD
+    # Relative path resolves to CWD, which is outside tmp_path/projects
+    assert is_valid is False
+    assert "outside allowed scope" in error
 
 
 # Operation Classification Tests

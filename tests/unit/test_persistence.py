@@ -194,7 +194,7 @@ def test_schema_migrations_table_created(tmp_path):
 async def test_execution_log_table_structure(tmp_path):
     """Verify execution_log table has correct STRICT schema."""
     db_path = tmp_path / "test.db"
-    migrations_dir = Path("src/sohnbot/persistence/migrations")
+    migrations_dir = Path(__file__).parent.parent.parent / "src" / "sohnbot" / "persistence" / "migrations"
 
     # Apply real migrations
     apply_migrations(db_path, migrations_dir)
@@ -219,7 +219,7 @@ async def test_execution_log_table_structure(tmp_path):
 async def test_execution_log_check_constraints(tmp_path):
     """Verify CHECK constraints on tier and status."""
     db_path = tmp_path / "test.db"
-    migrations_dir = Path("src/sohnbot/persistence/migrations")
+    migrations_dir = Path(__file__).parent.parent.parent / "src" / "sohnbot" / "persistence" / "migrations"
 
     apply_migrations(db_path, migrations_dir)
 
@@ -246,7 +246,7 @@ async def test_execution_log_check_constraints(tmp_path):
 async def test_config_table_structure(tmp_path):
     """Verify config table schema."""
     db_path = tmp_path / "test.db"
-    migrations_dir = Path("src/sohnbot/persistence/migrations")
+    migrations_dir = Path(__file__).parent.parent.parent / "src" / "sohnbot" / "persistence" / "migrations"
 
     apply_migrations(db_path, migrations_dir)
 
@@ -265,7 +265,7 @@ async def test_config_table_structure(tmp_path):
 async def test_strict_table_type_enforcement(tmp_path):
     """Verify STRICT mode enforces type checking."""
     db_path = tmp_path / "test.db"
-    migrations_dir = Path("src/sohnbot/persistence/migrations")
+    migrations_dir = Path(__file__).parent.parent.parent / "src" / "sohnbot" / "persistence" / "migrations"
 
     apply_migrations(db_path, migrations_dir)
 

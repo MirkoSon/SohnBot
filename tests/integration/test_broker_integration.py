@@ -13,7 +13,7 @@ from scripts.migrate import apply_migrations
 async def setup_database(tmp_path):
     """Set up test database with migrations."""
     db_path = tmp_path / "test.db"
-    migrations_dir = Path("src/sohnbot/persistence/migrations")
+    migrations_dir = Path(__file__).parent.parent.parent / "src" / "sohnbot" / "persistence" / "migrations"
 
     # Apply migrations
     apply_migrations(db_path, migrations_dir)
