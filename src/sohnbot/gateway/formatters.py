@@ -33,6 +33,18 @@ def format_for_telegram(response: str, max_length: int = 4096) -> list[str]:
 
     # Split on newlines to preserve formatting
     for line in response.split("\n"):
+        # If the line itself is too long, split it character-by-character
+        if len(line) > max_length:
+            # Save current chunk first
+            if current:
+                messages.append(current)
+                current = ""
+
+            # Split long line into chunks
+            for i in range(0, len(line), max_length):
+                messages.append(line[i:i + max_length])
+            continue
+
         # If adding this line would exceed the limit
         if len(current) + len(line) + 1 > max_length:
             # Save current chunk if not empty

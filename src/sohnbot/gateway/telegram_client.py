@@ -70,6 +70,11 @@ class TelegramClient:
             update: Telegram Update object
             context: Telegram context (unused)
         """
+        # Null-safety check
+        if not update.message or not update.effective_chat:
+            logger.warning("received_update_without_message_or_chat")
+            return
+
         chat_id = update.effective_chat.id
         message_text = update.message.text
 
@@ -100,7 +105,8 @@ class TelegramClient:
             # Format and send response (handle 4096-char limit)
             formatted_messages = format_for_telegram(response)
             for msg in formatted_messages:
-                await update.message.reply_text(msg, parse_mode="Markdown")
+                # Use plain text (no parse_mode) to avoid Markdown escaping issues
+                await update.message.reply_text(msg)
 
             logger.info(
                 "telegram_response_sent",
@@ -121,6 +127,9 @@ class TelegramClient:
 
     async def cmd_start(self, update: Update, context):
         """Handle /start command."""
+        if not update.message or not update.effective_chat:
+            return
+
         chat_id = update.effective_chat.id
 
         # Check authorization
@@ -136,6 +145,9 @@ class TelegramClient:
 
     async def cmd_help(self, update: Update, context):
         """Handle /help command."""
+        if not update.message or not update.effective_chat:
+            return
+
         chat_id = update.effective_chat.id
 
         # Check authorization
@@ -144,7 +156,7 @@ class TelegramClient:
             return
 
         await update.message.reply_text(
-            "📚 **SohnBot Help**\n\n"
+            "📚 SohnBot Help\n\n"
             "Just send me a message describing what you want to do!\n\n"
             "Examples:\n"
             "- List files in ~/Projects\n"
@@ -167,8 +179,7 @@ class TelegramClient:
         try:
             await self.application.bot.send_message(
                 chat_id=chat_id,
-                text=text,
-                parse_mode="Markdown"
+                text=text
             )
             logger.info("notification_sent", chat_id=chat_id)
             return True

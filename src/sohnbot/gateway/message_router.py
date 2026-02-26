@@ -57,6 +57,15 @@ class MessageRouter:
 
             aggregated_response = "\n\n".join(response_parts)
 
+            # Guard against empty responses
+            if not aggregated_response.strip():
+                logger.warning(
+                    "empty_response_from_runtime",
+                    chat_id=chat_id,
+                    parts_count=len(response_parts)
+                )
+                return "⚠️ No response generated. Please try again or rephrase your message."
+
             logger.info(
                 "runtime_response_received",
                 chat_id=chat_id,

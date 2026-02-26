@@ -42,9 +42,9 @@ class AgentSession:
         )
 
         # Load model configuration
-        model = self.config.get("models.telegram_default", "claude-haiku-4-5-20251001")
-        max_thinking = self.config.get("runtime.telegram_max_thinking_tokens", 4000)
-        max_turns = self.config.get("runtime.telegram_max_turns", 10)
+        model = self.config.get("models.telegram_default")
+        max_thinking = self.config.get("runtime.telegram_max_thinking_tokens")
+        max_turns = self.config.get("runtime.telegram_max_turns")
 
         logger.info(
             "agent_config_loaded",
