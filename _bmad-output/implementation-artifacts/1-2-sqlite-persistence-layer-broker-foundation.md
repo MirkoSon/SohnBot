@@ -1,6 +1,6 @@
 # Story 1.2: SQLite Persistence Layer & Broker Foundation
 
-Status: review
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -48,6 +48,21 @@ So that all operations are logged and policy enforcement is centralized.
   - [x] Unit tests: test_broker.py (scope validation, classification, logging)
   - [x] Integration tests: test_broker_integration.py (end-to-end flow)
   - [x] Integration tests: test_snapshot_recovery.py (snapshot creation/rollback)
+
+- [ ] Review Follow-ups (AI) — Code Review 2026-02-26
+  - [ ] [AI-Review][HIGH] Fix scope validation for `paths` (plural) — router only checks `params["path"]` singular, multi-file operations bypass scope validation entirely [src/sohnbot/broker/router.py]
+  - [ ] [AI-Review][HIGH] Fix `_operation_start_times` memory leak — entries never cleaned up when scope validation rejects (returns before `_calculate_duration()`) [src/sohnbot/broker/router.py]
+  - [ ] [AI-Review][HIGH] WAL mode failure should raise exception, not just log warning — silent downgrade risks data corruption under concurrent access [src/sohnbot/persistence/db.py]
+  - [ ] [AI-Review][HIGH] Fix vacuous test `test_validate_path_relative_to_absolute` — `assert is_valid is False or is_valid is True` always passes, tests nothing [tests/unit/test_broker.py]
+  - [ ] [AI-Review][HIGH] Fix duplicated Dev Agent Record — placeholder sections (lines 849-863) not removed, real data appended below; remove placeholder block
+  - [ ] [AI-Review][MEDIUM] Implement skipped tests or unmark tasks — 5 tests are `pytest.skip()` but tasks marked `[x]`: timeout enforcement (unit+integration), 3/4 snapshot recovery tests
+  - [ ] [AI-Review][MEDIUM] Fix test count discrepancies in Dev Agent Record — claims 44 tests (actual 42), claims test_broker_integration (6) actual 5, claims test_config_database_integration (6) actual 5
+  - [ ] [AI-Review][MEDIUM] Fix misleading `init_db()` docstring — says "applies all pending migrations" but only creates schema_migrations table [src/sohnbot/persistence/db.py]
+  - [ ] [AI-Review][MEDIUM] Add connection cleanup on pragma failure — if pragma fails between connect() and caching, connection is leaked [src/sohnbot/persistence/db.py]
+  - [ ] [AI-Review][MEDIUM] Add error context for missing execution_log table — raw OperationalError with no helpful message if called before migrations [src/sohnbot/persistence/audit.py]
+  - [ ] [AI-Review][LOW] Use full paths in File List — record lists "db.py" not "src/sohnbot/persistence/db.py"
+  - [ ] [AI-Review][LOW] Consider path-based scope validation instead of capability-based — currently hardcoded to `capability == "fs"` only [src/sohnbot/broker/router.py]
+  - [ ] [AI-Review][LOW] Fix hardcoded relative migrations path in tests — `Path("src/sohnbot/persistence/migrations")` breaks when CWD is not project root [tests/unit/test_persistence.py]
 
 ## Dev Notes
 
@@ -845,23 +860,6 @@ tests/integration/
 - [Structlog ContextVars: Python Async Logging 2026](https://johal.in/structlog-contextvars-python-async-logging-2026/)
 
 ## Dev Agent Record
-
-### Agent Model Used
-
-_To be filled by dev agent_
-
-### Debug Log References
-
-_To be filled by dev agent if issues encountered_
-
-### Completion Notes List
-
-_To be filled by dev agent upon completion_
-
-### File List
-
-_To be filled by dev agent with all files created/modified_
-
 
 ### Agent Model Used
 
