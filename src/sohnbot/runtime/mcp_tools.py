@@ -24,86 +24,81 @@ def create_sohnbot_mcp_server(broker, config):
         SDK MCP server instance
     """
 
+    def _as_mcp_text(text: str) -> dict:
+        return {"content": [{"type": "text", "text": text}]}
+
+    def _format_file_result(action: str, result: dict) -> str:
+        if action == "read":
+            return result.get("content", "")
+        if action == "list":
+            files = result.get("files", [])
+            if not files:
+                return "No files found."
+            lines = [
+                f'{item["path"]} | {item["size"]} bytes | mtime={item["modified_at"]}'
+                for item in files
+            ]
+            return "\n".join(lines)
+        if action == "search":
+            matches = result.get("matches", [])
+            if not matches:
+                return "No matches found."
+            lines = [
+                f'{item["path"]}:{item["line"]}: {item["content"]}'
+                for item in matches
+            ]
+            return "\n".join(lines)
+        return str(result)
+
+    async def _run_file_tool(action: str, params: dict, chat_id: str) -> dict:
+        result = await broker.route_operation(
+            capability="fs",
+            action=action,
+            params=params,
+            chat_id=chat_id,
+        )
+
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool=f"fs__{action}", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+
+        return _as_mcp_text(_format_file_result(action, result.result or {}))
+
     # File operations (Story 1.5 - stubs for now)
     @tool("fs__read", "Read file contents", {"path": str})
     async def fs_read(args):
-        """Read file via broker (Story 1.5 will implement actual capability)."""
+        """Read file via broker."""
         # Get chat_id from context (bound in agent_session.py)
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
 
         path = args.get("path")
         logger.info("mcp_tool_invoked", tool="fs__read", path=path, chat_id=chat_id)
-
-        # Route through broker for validation and logging
-        result = await broker.route_operation(
-            capability="fs",
+        max_size_mb = config.get("files.max_size_mb")
+        return await _run_file_tool(
             action="read",
-            params={"path": path},
-            chat_id=chat_id
+            params={"path": path, "max_size_mb": max_size_mb},
+            chat_id=chat_id,
         )
-
-        # Check if operation was denied
-        if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
-            logger.warning("mcp_tool_denied", tool="fs__read", error=error_msg)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Operation denied: {error_msg}"
-                }]
-            }
-
-        # Operation allowed - return stub (capability not implemented yet)
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "File read capability not yet implemented (Story 1.5). "
-                    "This is a stub for testing gateway/runtime integration."
-                )
-            }]
-        }
 
     @tool("fs__list", "List files in directory", {"path": str})
     async def fs_list(args):
-        """List files via broker (Story 1.5 will implement actual capability)."""
+        """List files via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
 
         path = args.get("path")
         logger.info("mcp_tool_invoked", tool="fs__list", path=path, chat_id=chat_id)
-
-        result = await broker.route_operation(
-            capability="fs",
+        return await _run_file_tool(
             action="list",
             params={"path": path},
-            chat_id=chat_id
+            chat_id=chat_id,
         )
-
-        if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
-            logger.warning("mcp_tool_denied", tool="fs__list", error=error_msg)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Operation denied: {error_msg}"
-                }]
-            }
-
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "File list capability not yet implemented (Story 1.5). "
-                    "This is a stub for testing gateway/runtime integration."
-                )
-            }]
-        }
 
     @tool("fs__search", "Search file contents", {"pattern": str, "path": str})
     async def fs_search(args):
-        """Search files via broker (Story 1.5 will implement actual capability)."""
+        """Search files via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
 
@@ -117,32 +112,29 @@ def create_sohnbot_mcp_server(broker, config):
             chat_id=chat_id
         )
 
-        result = await broker.route_operation(
-            capability="fs",
+        timeout_seconds = config.get("files.search_timeout_seconds")
+        return await _run_file_tool(
             action="search",
-            params={"pattern": pattern, "path": path},
-            chat_id=chat_id
+            params={
+                "pattern": pattern,
+                "path": path,
+                "timeout_seconds": timeout_seconds,
+            },
+            chat_id=chat_id,
         )
 
-        if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
-            logger.warning("mcp_tool_denied", tool="fs__search", error=error_msg)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Operation denied: {error_msg}"
-                }]
-            }
+    # Alias names expected by architecture/story docs.
+    @tool("files__read", "Read file contents", {"path": str})
+    async def files_read(args):
+        return await fs_read(args)
 
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "File search capability not yet implemented (Story 1.5). "
-                    "This is a stub for testing gateway/runtime integration."
-                )
-            }]
-        }
+    @tool("files__list", "List files in directory", {"path": str})
+    async def files_list(args):
+        return await fs_list(args)
+
+    @tool("files__search", "Search file contents", {"pattern": str, "path": str})
+    async def files_search(args):
+        return await fs_search(args)
 
     @tool("fs__apply_patch", "Apply unified diff patch", {"path": str, "patch": str})
     async def fs_apply_patch(args):
@@ -332,6 +324,9 @@ def create_sohnbot_mcp_server(broker, config):
             fs_read,
             fs_list,
             fs_search,
+            files_read,
+            files_list,
+            files_search,
             fs_apply_patch,
             git_status,
             git_diff,

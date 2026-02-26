@@ -14,7 +14,8 @@
       "Bash(touch:*)",
       "Bash(find tests:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(ls:*)"
     ]
   }
 }

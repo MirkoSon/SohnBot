@@ -7,9 +7,11 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 import structlog
 
+from ..capabilities.files import FileCapabilityError, FileOps
 from .operation_classifier import classify_tier
 from .scope_validator import ScopeValidator
 from ..persistence.audit import log_operation_start, log_operation_end
+from ..config.manager import ConfigManager
 
 logger = structlog.get_logger(__name__)
 
@@ -23,19 +25,23 @@ class BrokerResult:
     tier: Optional[int] = None
     snapshot_ref: Optional[str] = None
     error: Optional[dict] = None
+    result: Optional[dict] = None
 
 
 class BrokerRouter:
     """Central routing and policy enforcement for all capabilities."""
 
-    def __init__(self, scope_validator: ScopeValidator):
+    def __init__(self, scope_validator: ScopeValidator, config_manager: Optional[ConfigManager] = None):
         """
         Initialize broker router.
 
         Args:
             scope_validator: ScopeValidator instance for path validation
+            config_manager: ConfigManager instance for dynamic configuration (optional for tests)
         """
         self.scope_validator = scope_validator
+        self.config_manager = config_manager
+        self.file_ops = FileOps()
         self._operation_start_times: Dict[str, float] = {}
 
     async def route_operation(
@@ -76,6 +82,38 @@ class BrokerRouter:
 
         # 3. Validate scope (if file operation)
         if capability == "fs":
+            # Validate required parameters
+            if action in {"read", "list", "search"} and "path" not in params:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameter: path",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+
+            # Validate search pattern parameter
+            if action == "search":
+                pattern = params.get("pattern", "")
+                if not pattern or not isinstance(pattern, str):
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "Missing or invalid required parameter: pattern",
+                            "details": {"action": action, "pattern": pattern},
+                            "retryable": False,
+                        },
+                    )
+
             # Check both singular 'path' and plural 'paths'
             paths_to_validate = []
             if "path" in params:
@@ -136,14 +174,17 @@ class BrokerRouter:
                 # Create git snapshot branch before execution
                 snapshot_ref = await self._create_snapshot(operation_id)
 
-            # Execute capability with timeout
-            # TODO: Get timeout from config (Story 1.5+)
-            timeout_seconds = 300  # Default 5 minutes
+            # Execute capability with timeout from configuration
+            timeout_seconds = (
+                self.config_manager.get("broker.operation_timeout_seconds")
+                if self.config_manager
+                else 300  # Default 5 minutes for tests without config
+            )
 
             async with asyncio.timeout(timeout_seconds):
                 # TODO: Route to actual capability implementations (Story 1.5+)
                 # For now, this is a placeholder - capabilities not yet implemented
-                result = await self._execute_capability_placeholder(
+                result = await self._execute_capability(
                     capability, action, params
                 )
 
@@ -161,6 +202,7 @@ class BrokerRouter:
                 operation_id=operation_id,
                 tier=tier,
                 snapshot_ref=snapshot_ref,
+                result=result,
             )
 
         except asyncio.TimeoutError:
@@ -181,6 +223,22 @@ class BrokerRouter:
                     "message": "Operation timed out",
                     "retryable": True,
                 },
+            )
+
+        except FileCapabilityError as e:
+            # Log operation end (capability validation/runtime error)
+            duration_ms = self._calculate_duration(operation_id)
+            await log_operation_end(
+                operation_id=operation_id,
+                status="failed",
+                duration_ms=duration_ms,
+                error_details=e.to_dict(),
+            )
+            return BrokerResult(
+                allowed=False,
+                operation_id=operation_id,
+                tier=tier,
+                error=e.to_dict(),
             )
 
         except Exception as e:
@@ -294,3 +352,24 @@ class BrokerRouter:
             "status": "placeholder",
             "message": f"Capability {capability}.{action} not yet implemented",
         }
+
+    async def _execute_capability(
+        self, capability: str, action: str, params: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Execute capability action with concrete implementations when available."""
+        if capability == "fs":
+            if action == "list":
+                return self.file_ops.list_files(params.get("path", "."))
+            if action == "read":
+                return self.file_ops.read_file(
+                    path=params["path"],
+                    max_size_mb=int(params.get("max_size_mb", 10)),
+                )
+            if action == "search":
+                return await self.file_ops.search_files(
+                    path=params.get("path", "."),
+                    pattern=params.get("pattern", ""),
+                    timeout_seconds=int(params.get("timeout_seconds", 5)),
+                )
+
+        return await self._execute_capability_placeholder(capability, action, params)

@@ -22,7 +22,7 @@ def test_validate_path_within_scope(tmp_path):
     is_valid, error = validator.validate_path(str(test_file))
 
     assert is_valid is True
-    assert error is None
+    assert error == ""
 
 
 def test_validate_path_outside_scope(tmp_path):
@@ -174,6 +174,7 @@ async def test_route_operation_logs_end(mock_log_end, mock_log_start, tmp_path):
     """Operation end should be logged with duration."""
     allowed_root = tmp_path / "projects"
     allowed_root.mkdir()
+    (allowed_root / "test.txt").write_text("hello")
 
     validator = ScopeValidator([str(allowed_root)])
     router = BrokerRouter(validator)
@@ -260,6 +261,7 @@ async def test_route_operation_error_handling(mock_log_end, mock_log_start, tmp_
     """Exceptions should be logged and returned in BrokerResult."""
     allowed_root = tmp_path / "projects"
     allowed_root.mkdir()
+    (allowed_root / "test.txt").write_text("hello")
 
     validator = ScopeValidator([str(allowed_root)])
     router = BrokerRouter(validator)
@@ -268,7 +270,7 @@ async def test_route_operation_error_handling(mock_log_end, mock_log_start, tmp_
     async def failing_operation(*args, **kwargs):
         raise ValueError("Test error")
 
-    with patch.object(router, "_execute_capability_placeholder", side_effect=failing_operation):
+    with patch.object(router, "_execute_capability", side_effect=failing_operation):
         result = await router.route_operation(
             capability="fs",
             action="read",

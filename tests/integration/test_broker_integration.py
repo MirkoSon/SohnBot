@@ -33,6 +33,7 @@ async def test_broker_tier_0_operation_no_snapshot(tmp_path, setup_database):
     """Tier 0 (read) operation should complete without snapshot."""
     allowed_root = tmp_path / "projects"
     allowed_root.mkdir()
+    (allowed_root / "test.txt").write_text("hello")
 
     validator = ScopeValidator([str(allowed_root)])
     router = BrokerRouter(validator)
@@ -180,6 +181,7 @@ async def test_execution_log_completeness(tmp_path, setup_database):
     """All operations should be logged with complete metadata."""
     allowed_root = tmp_path / "projects"
     allowed_root.mkdir()
+    (allowed_root / "file1.txt").write_text("one")
 
     validator = ScopeValidator([str(allowed_root)])
     router = BrokerRouter(validator)
@@ -189,7 +191,7 @@ async def test_execution_log_completeness(tmp_path, setup_database):
         capability="fs", action="read", params={"path": str(allowed_root / "file1.txt")}, chat_id="chat1"
     )
     await router.route_operation(
-        capability="fs", action="list", params={}, chat_id="chat1"
+        capability="fs", action="list", params={"path": str(allowed_root)}, chat_id="chat1"
     )
     await router.route_operation(
         capability="git", action="status", params={}, chat_id="chat2"

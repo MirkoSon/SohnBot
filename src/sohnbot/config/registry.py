@@ -98,6 +98,15 @@ REGISTRY: dict[str, ConfigKey] = {
         max_value=300,
     ),
 
+    # ===== BROKER (Dynamic - Operation timeout tuning) =====
+    "broker.operation_timeout_seconds": ConfigKey(
+        tier="dynamic",
+        value_type=int,
+        default=300,
+        min_value=10,
+        max_value=3600,
+    ),
+
     # ===== FILE OPERATIONS (Dynamic - Performance tuning) =====
     "files.max_size_mb": ConfigKey(
         tier="dynamic",

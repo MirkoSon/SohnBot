@@ -36,6 +36,10 @@ retention_days = 90
 allowed_chat_ids = []
 response_timeout_seconds = 30
 
+[broker]
+# Broker operation timeouts (DYNAMIC - hot-reloadable)
+operation_timeout_seconds = 300
+
 [files]
 # File operation limits (DYNAMIC - hot-reloadable)
 max_size_mb = 10

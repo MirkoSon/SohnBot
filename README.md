@@ -20,6 +20,7 @@ SohnBot is an autonomous agent that executes file operations, git commands, sche
 - Python 3.13+
 - Poetry
 - Git
+- ripgrep (rg) - Required for file search operations
 - Telegram Bot Token (from @BotFather)
 - Anthropic API Key
 - Brave Search API Key (optional, for web search)
@@ -27,7 +28,17 @@ SohnBot is an autonomous agent that executes file operations, git commands, sche
 ## Installation
 
 ```bash
-# Install dependencies with Poetry
+# Install system dependencies
+# On macOS
+brew install ripgrep
+
+# On Ubuntu/Debian
+sudo apt-get install ripgrep
+
+# On Windows (via Chocolatey)
+choco install ripgrep
+
+# Install Python dependencies with Poetry
 poetry install
 
 # Copy environment template
