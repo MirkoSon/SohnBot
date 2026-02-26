@@ -1,6 +1,6 @@
 # Story 1.3: Telegram Gateway & Claude Agent SDK Integration
 
-Status: review
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -54,6 +54,22 @@ So that users can interact with SohnBot through natural language.
   - [x] Unit tests: test_mcp_tools.py (tool → broker routing, error handling)
   - [x] Integration tests: test_telegram_to_broker.py (end-to-end message flow)
   - [x] Integration tests: test_unauthorized_access.py (chat_id blocking)
+
+### Review Follow-ups (AI)
+
+- [ ] [AI-Review][CRITICAL] MCP tools do not call broker.route_operation() — broker param accepted but never used; wire stub tools through broker even if capabilities don't exist yet [src/sohnbot/runtime/mcp_tools.py:28-153]
+- [ ] [AI-Review][CRITICAL] ConfigManager.get() signature mismatch — agent_session passes 2 args (key, default) but ConfigManager.get() only accepts 1 (key); will raise TypeError in production [src/sohnbot/runtime/agent_session.py:45-47]
+- [ ] [AI-Review][CRITICAL] 4 tests failing: test_handle_message_formats_response (formatter doesn't split single lines >4096), test_query_binds_chat_id and test_query_streams_response (mock returns coroutine not async iterator), test_close_cleanup (accesses None.__aexit__ after close nulls client) [tests/unit/test_telegram_client.py:122, tests/unit/test_agent_session.py:129,148,174]
+- [ ] [AI-Review][CRITICAL] Story claims 48 tests but only 40 exist (pytest collects 40); test counts in File List are inflated — update File List to reflect actual counts [story metadata]
+- [ ] [AI-Review][HIGH] format_for_telegram breaks on single lines exceeding max_length — splits only on newlines so a 5000-char line becomes one chunk over 4096; add character-level splitting fallback [src/sohnbot/gateway/formatters.py:35-46]
+- [ ] [AI-Review][HIGH] Empty agent response sends empty string to Telegram API — join of empty response_parts yields "" which Telegram rejects as BadRequest; add guard for empty responses [src/sohnbot/gateway/message_router.py:58]
+- [ ] [AI-Review][HIGH] context_loader.py is entirely dead code — load_claude_md() and get_model_config() defined but never called or exported; either integrate or remove [src/sohnbot/runtime/context_loader.py]
+- [ ] [AI-Review][HIGH] chat_id never flows to MCP tools or broker — task "Pass chat_id context through to broker" marked [x] but tools have no mechanism to receive session chat_id [src/sohnbot/runtime/mcp_tools.py]
+- [ ] [AI-Review][MEDIUM] parse_mode="Markdown" uses deprecated Telegram Markdown v1 — python-telegram-bot v22.x recommends MarkdownV2; v1 breaks on special characters in agent responses [src/sohnbot/gateway/telegram_client.py:103,131,147,170]
+- [ ] [AI-Review][MEDIUM] No null-safety for update.message — accessing update.message.text without None check; edited messages and channel posts have message=None causing AttributeError [src/sohnbot/gateway/telegram_client.py:74]
+- [ ] [AI-Review][MEDIUM] MCP tool tests are placeholder assertions — test_mcp_server_creation and test_fs_read_stub_response only check server is not None; no actual tool invocation or broker integration verified [tests/unit/test_mcp_tools.py:28-53]
+- [ ] [AI-Review][LOW] .env.example listed in File List but not modified in git — File List should only include actually changed files [story File List]
+- [ ] [AI-Review][LOW] test_format_code_blocks doesn't verify code blocks aren't split mid-block — assertion only checks backticks exist somewhere, not that they're in the same chunk [tests/unit/test_telegram_client.py:198-204]
 
 ## Dev Notes
 
