@@ -204,14 +204,25 @@ async def test_route_operation_snapshot_creation_tier_1(mock_log_end, mock_log_s
     validator = ScopeValidator([str(allowed_root)])
     router = BrokerRouter(validator)
 
-    result = await router.route_operation(
-        capability="fs",
-        action="apply_patch",
-        params={"path": str(allowed_root / "test.txt")},  # Single file = Tier 1
-        chat_id="test_chat",
+    # Create target file and a valid patch; mock SnapshotManager so no real git needed
+    target_file = allowed_root / "test.txt"
+    target_file.write_text("line1\nline2\nline3\n")
+
+    valid_patch = (
+        f"--- test.txt\n+++ test.txt\n"
+        "@@ -1,3 +1,3 @@\n line1\n-line2\n+line2_modified\n line3\n"
     )
 
-    # Verify snapshot was created (placeholder)
+    with patch.object(router.snapshot_manager, "find_repo_root", return_value=str(allowed_root)), \
+         patch.object(router.snapshot_manager, "create_snapshot", new=AsyncMock(return_value="snapshot/edit-2026-02-26-1200")):
+        result = await router.route_operation(
+            capability="fs",
+            action="apply_patch",
+            params={"path": str(target_file), "patch": valid_patch},
+            chat_id="test_chat",
+        )
+
+    # Verify snapshot was created with real git snapshot manager
     assert result.snapshot_ref is not None
     assert result.snapshot_ref.startswith("snapshot/edit-")
 

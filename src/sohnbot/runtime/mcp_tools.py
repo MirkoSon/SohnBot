@@ -48,6 +48,11 @@ def create_sohnbot_mcp_server(broker, config):
                 for item in matches
             ]
             return "\n".join(lines)
+        if action == "apply_patch":
+            path = result.get("path", "?")
+            added = result.get("lines_added", 0)
+            removed = result.get("lines_removed", 0)
+            return f"Patch applied to {path}. Lines: +{added}/-{removed}"
         return str(result)
 
     async def _run_file_tool(action: str, params: dict, chat_id: str) -> dict:
@@ -138,40 +143,20 @@ def create_sohnbot_mcp_server(broker, config):
 
     @tool("fs__apply_patch", "Apply unified diff patch", {"path": str, "patch": str})
     async def fs_apply_patch(args):
-        """Apply patch via broker (Story 1.6 will implement actual capability)."""
+        """Apply unified diff patch via broker with snapshot creation."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
 
         path = args.get("path")
-        patch = args.get("patch")
+        patch_content = args.get("patch")
         logger.info("mcp_tool_invoked", tool="fs__apply_patch", path=path, chat_id=chat_id)
 
-        result = await broker.route_operation(
-            capability="fs",
+        patch_max_kb = config.get("files.patch_max_size_kb")
+        return await _run_file_tool(
             action="apply_patch",
-            params={"path": path, "patch": patch},
-            chat_id=chat_id
+            params={"path": path, "patch": patch_content, "patch_max_size_kb": patch_max_kb},
+            chat_id=chat_id,
         )
-
-        if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
-            logger.warning("mcp_tool_denied", tool="fs__apply_patch", error=error_msg)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Operation denied: {error_msg}"
-                }]
-            }
-
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "File patch capability not yet implemented (Story 1.6). "
-                    "This is a stub for testing gateway/runtime integration."
-                )
-            }]
-        }
 
     # Git operations (Epic 2 - stubs for now)
     @tool("git__status", "Get git status", {})

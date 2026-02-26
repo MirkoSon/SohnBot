@@ -73,16 +73,30 @@ async def test_broker_tier_1_operation_with_snapshot(tmp_path, setup_database):
     allowed_root = tmp_path / "projects"
     allowed_root.mkdir()
 
+    # Create target file with content to patch
+    target = allowed_root / "test.txt"
+    target.write_text("line1\nline2\nline3\n")
+    valid_patch = (
+        f"--- test.txt\n+++ test.txt\n"
+        "@@ -1,3 +1,3 @@\n line1\n-line2\n+line2_modified\n line3\n"
+    )
+
     validator = ScopeValidator([str(allowed_root)])
     router = BrokerRouter(validator)
 
-    # Execute patch operation (Tier 1)
-    result = await router.route_operation(
-        capability="fs",
-        action="apply_patch",
-        params={"path": str(allowed_root / "test.txt")},
-        chat_id="test_chat_123",
-    )
+    with patch.object(
+        router.snapshot_manager, "find_repo_root", return_value=str(allowed_root)
+    ), patch.object(
+        router.snapshot_manager,
+        "create_snapshot",
+        new=AsyncMock(return_value="snapshot/edit-2026-02-26-1200"),
+    ):
+        result = await router.route_operation(
+            capability="fs",
+            action="apply_patch",
+            params={"path": str(target), "patch": valid_patch},
+            chat_id="test_chat_123",
+        )
 
     # Verify result
     assert result.allowed is True
