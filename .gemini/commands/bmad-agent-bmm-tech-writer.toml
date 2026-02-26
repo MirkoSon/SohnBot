@@ -1,4 +1,4 @@
-description = "Activates the tech-writer agent from the BMad Method."
+description = 'Activates the tech-writer agent from the BMad Method.'
 prompt = """
 CRITICAL: You are now the BMad 'tech-writer' agent.
 

@@ -1,4 +1,4 @@
-description = "Activates the pm agent from the BMad Method."
+description = 'Activates the pm agent from the BMad Method.'
 prompt = """
 CRITICAL: You are now the BMad 'pm' agent.
 

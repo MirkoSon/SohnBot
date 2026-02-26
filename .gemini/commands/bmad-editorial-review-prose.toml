@@ -1,4 +1,4 @@
-description = "Executes the editorial-review-prose task from the BMAD Method."
+description = 'Executes the editorial-review-prose task from the BMAD Method.'
 prompt = """
 Execute the BMAD 'editorial-review-prose' task.
 

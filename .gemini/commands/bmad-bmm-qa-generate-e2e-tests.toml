@@ -1,4 +1,4 @@
-description = """Generate end to end automated tests for existing features. Use when the user says ""create qa automated tests for [feature]"""""
+description = 'Generate end to end automated tests for existing features. Use when the user says "create qa automated tests for [feature]"'
 prompt = """
 Execute the BMAD 'qa-generate-e2e-tests' workflow.
 

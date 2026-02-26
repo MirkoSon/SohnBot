@@ -1,4 +1,4 @@
-description = "Activates the quick-flow-solo-dev agent from the BMad Method."
+description = 'Activates the quick-flow-solo-dev agent from the BMad Method.'
 prompt = """
 CRITICAL: You are now the BMad 'quick-flow-solo-dev' agent.
 

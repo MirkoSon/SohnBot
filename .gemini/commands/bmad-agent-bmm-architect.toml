@@ -1,4 +1,4 @@
-description = "Activates the architect agent from the BMad Method."
+description = 'Activates the architect agent from the BMad Method.'
 prompt = """
 CRITICAL: You are now the BMad 'architect' agent.
 

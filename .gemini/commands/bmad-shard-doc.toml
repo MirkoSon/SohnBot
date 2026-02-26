@@ -1,4 +1,4 @@
-description = "Executes the shard-doc task from the BMAD Method."
+description = 'Executes the shard-doc task from the BMAD Method.'
 prompt = """
 Execute the BMAD 'shard-doc' task.
 

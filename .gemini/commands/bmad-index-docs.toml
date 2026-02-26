@@ -1,4 +1,4 @@
-description = "Executes the index-docs task from the BMAD Method."
+description = 'Executes the index-docs task from the BMAD Method.'
 prompt = """
 Execute the BMAD 'index-docs' task.
 
