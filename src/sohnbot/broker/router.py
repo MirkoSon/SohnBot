@@ -86,8 +86,20 @@ class BrokerRouter:
             for path in paths_to_validate:
                 is_valid, error_msg = self.scope_validator.validate_path(path)
                 if not is_valid:
+                    normalized_path = self.scope_validator.get_normalized_path(path)
+                    allowed_roots = self.scope_validator.get_allowed_roots()
+                    logger.warning(
+                        "scope_violation_blocked",
+                        operation_id=operation_id,
+                        chat_id=chat_id,
+                        capability=capability,
+                        action=action,
+                        attempted_path=str(path),
+                        normalized_path=normalized_path,
+                        allowed_roots=allowed_roots,
+                    )
                     # Clean up operation start time to prevent memory leak
-                    del self._operation_start_times[operation_id]
+                    self._operation_start_times.pop(operation_id, None)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -95,7 +107,11 @@ class BrokerRouter:
                         error={
                             "code": "scope_violation",
                             "message": error_msg,
-                            "details": {"path": path},
+                            "details": {
+                                "path": str(path),
+                                "normalized_path": normalized_path,
+                                "allowed_roots": allowed_roots,
+                            },
                             "retryable": False,
                         },
                     )
