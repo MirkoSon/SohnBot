@@ -8,7 +8,10 @@
       "Bash(cd E:\\\\GIT\\\\SohnBot:*)",
       "Bash(echo Poetry not installed:*)",
       "Bash(tail:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(poetry install:*)",
+      "Bash(mkdir:*)",
+      "Bash(touch:*)"
     ]
   }
 }

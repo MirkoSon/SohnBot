@@ -1,6 +1,6 @@
 # Story 1.2: SQLite Persistence Layer & Broker Foundation
 
-Status: in-progress
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
