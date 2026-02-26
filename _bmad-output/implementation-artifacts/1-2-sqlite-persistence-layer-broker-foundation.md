@@ -24,30 +24,30 @@ So that all operations are logged and policy enforcement is centralized.
 ## Tasks / Subtasks
 
 - [x] Create SQLite persistence layer (AC: 1, 2, 3)
-  - [ ] Create src/sohnbot/persistence/db.py with WAL mode configuration
-  - [ ] Create migrations/0001_init.sql with execution_log table (STRICT mode)
-  - [ ] Create migrations/0001_init.sql with config table (STRICT mode)
-  - [ ] Create schema_migrations tracking table
-  - [ ] Implement connection pooling and pragma configuration
+  - [x] Create src/sohnbot/persistence/db.py with WAL mode configuration
+  - [x] Create migrations/0001_init.sql with execution_log table (STRICT mode)
+  - [x] Create migrations/0001_init.sql with config table (STRICT mode)
+  - [x] Create schema_migrations tracking table
+  - [x] Implement connection pooling and pragma configuration
 
 - [x] Create migration runner with checksum verification (AC: 4)
-  - [ ] Create scripts/migrate.py with SHA-256 checksum verification
-  - [ ] Implement lexical migration ordering
-  - [ ] Add transactional migration execution
-  - [ ] Add tamper detection for migration files
+  - [x] Create scripts/migrate.py with SHA-256 checksum verification
+  - [x] Implement lexical migration ordering
+  - [x] Add transactional migration execution
+  - [x] Add tamper detection for migration files
 
 - [x] Implement broker layer foundation (AC: 5, 6)
-  - [ ] Create src/sohnbot/broker/operation_classifier.py (Tier 0/1/2/3 logic)
-  - [ ] Create src/sohnbot/broker/scope_validator.py (path normalization, traversal prevention)
-  - [ ] Create src/sohnbot/broker/router.py (central routing, validation, logging)
-  - [ ] Create BrokerResult dataclass
-  - [ ] Implement audit logging (log_operation_start, log_operation_end)
+  - [x] Create src/sohnbot/broker/operation_classifier.py (Tier 0/1/2/3 logic)
+  - [x] Create src/sohnbot/broker/scope_validator.py (path normalization, traversal prevention)
+  - [x] Create src/sohnbot/broker/router.py (central routing, validation, logging)
+  - [x] Create BrokerResult dataclass
+  - [x] Implement audit logging (log_operation_start, log_operation_end)
 
 - [x] Implement comprehensive testing (AC: all)
-  - [ ] Unit tests: test_persistence.py (database, migrations, schemas)
-  - [ ] Unit tests: test_broker.py (scope validation, classification, logging)
-  - [ ] Integration tests: test_broker_integration.py (end-to-end flow)
-  - [ ] Integration tests: test_snapshot_recovery.py (snapshot creation/rollback)
+  - [x] Unit tests: test_persistence.py (database, migrations, schemas)
+  - [x] Unit tests: test_broker.py (scope validation, classification, logging)
+  - [x] Integration tests: test_broker_integration.py (end-to-end flow)
+  - [x] Integration tests: test_snapshot_recovery.py (snapshot creation/rollback)
 
 ## Dev Notes
 
