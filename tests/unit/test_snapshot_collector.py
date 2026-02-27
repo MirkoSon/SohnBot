@@ -52,8 +52,10 @@ def reset_snapshot_cache():
 
     obs_module._snapshot_cache = None
     sc_module._process = None  # Reset cached psutil handle
+    sc_module._persist_warning_logged = False  # Reset warning flag
     yield
     obs_module._snapshot_cache = None
+    sc_module._persist_warning_logged = False
 
 
 @pytest.fixture
@@ -86,8 +88,20 @@ async def _seed_operation(db_manager: DatabaseManager, op_id: str, status: str =
     await db.commit()
 
 
-async def _seed_notification(db_manager: DatabaseManager, op_id: str, status: str = "pending") -> None:
-    """Seed a row in notification_outbox for testing."""
+async def _seed_notification(
+    db_manager: DatabaseManager,
+    op_id: str,
+    status: str = "pending",
+    sent_at: int | None = None,
+) -> None:
+    """Seed a row in notification_outbox for testing.
+
+    Args:
+        db_manager: DatabaseManager for the test DB.
+        op_id: Unique operation ID for the seeded rows.
+        status: Notification status ('pending', 'sent', 'failed').
+        sent_at: Optional Unix epoch for sent_at column (simulates attempted send).
+    """
     db = await db_manager.get_connection()
     await db.execute(
         """
@@ -100,10 +114,10 @@ async def _seed_notification(db_manager: DatabaseManager, op_id: str, status: st
     await db.execute(
         """
         INSERT INTO notification_outbox (
-            operation_id, chat_id, status, message_text, created_at
-        ) VALUES (?, 'chat1', ?, 'test msg', strftime('%s','now'))
+            operation_id, chat_id, status, message_text, created_at, sent_at
+        ) VALUES (?, 'chat1', ?, 'test msg', strftime('%s','now'), ?)
         """,
-        (op_id, status),
+        (op_id, status, sent_at),
     )
     await db.commit()
 
@@ -232,6 +246,17 @@ async def test_collect_notifier_state_oldest_age_is_non_negative(db_with_tables)
     state = await collect_notifier_state()
     if state.oldest_pending_age_seconds is not None:
         assert state.oldest_pending_age_seconds >= 0
+
+
+@pytest.mark.asyncio
+async def test_collect_notifier_state_last_attempt_uses_sent_at(db_with_tables):
+    """last_attempt_timestamp reflects sent_at, not created_at, when available."""
+    # Seed a sent notification with a known sent_at in the past
+    known_sent_at = 1_700_000_000  # 2023-11-14 — clearly distinct from now
+    await _seed_notification(db_with_tables, "notif_sent", status="sent", sent_at=known_sent_at)
+    state = await collect_notifier_state()
+    # last_attempt_timestamp must reflect the actual send time, not now
+    assert state.last_attempt_timestamp == known_sent_at
 
 
 @pytest.mark.asyncio

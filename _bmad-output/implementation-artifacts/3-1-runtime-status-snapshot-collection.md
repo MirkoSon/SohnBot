@@ -1,6 +1,6 @@
 # Story 3.1: Runtime Status Snapshot Collection
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -595,9 +595,29 @@ claude-sonnet-4-6
 - ✅ No regressions introduced (all pre-existing passing tests still pass)
 - ✅ Pre-existing issues confirmed: ruff py313 config error, 3 collection errors (patch_editor, snapshot_manager, rollback_operations), full-suite async cleanup timeout
 
+### Senior Developer Review (AI)
+
+**Date:** 2026-02-27
+**Reviewer:** Mirko (AI Code Review)
+**Outcome:** Approved with fixes applied
+
+**Issues Fixed (3 MEDIUM):**
+- **MEDIUM-1:** `_get_pm2_info()` returned `("pm2", None, None)` even when pm2 binary is installed but not managing the process — causing false positive `supervisor="pm2"` on any developer machine with pm2 installed. Fixed: return `("none", None, None)` when subprocess fails or returns non-zero.
+- **MEDIUM-2:** `last_attempt_timestamp` in `collect_notifier_state()` used `SELECT MAX(created_at)` — returning notification creation time, not the actual last send attempt time. Fixed: `COALESCE(MAX(sent_at), MAX(created_at))` to correctly reflect when the notifier last ran.
+- **MEDIUM-3:** `_maybe_persist_snapshot()` silently did nothing when `persist_snapshots=True`, emitting only a DEBUG log invisible to operators. Fixed: one-time WARNING log explaining persistence is not yet implemented; added `_persist_warning_logged` flag to rate-limit it.
+
+**Low issues noted (not fixed — acceptable for story scope):**
+- `_collect_disk_metrics` calls `get_config_manager()` 3 times redundantly
+- `test_collect_snapshot_completes_fast` uses 5000ms threshold (NFR-024 is 100ms prod target)
+- No tests for supervisor env var detection paths (pm2/systemd)
+- `_get_process()` singleton not thread-safe (benign race, psutil assignment is idempotent)
+
+**Test additions:** 1 new test (`test_collect_notifier_state_last_attempt_uses_sent_at`) — total 43 tests, all passing.
+
 ### Change Log
 
 - 2026-02-27: Story 3.1 implemented — Runtime Status Snapshot Collection (psutil dependency, observability module, 7 dataclasses, background collector loop, 42 tests)
+- 2026-02-27: Code review fixes applied — 3 MEDIUM issues resolved; 43 tests passing
 
 ### File List
 

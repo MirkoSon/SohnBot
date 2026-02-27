@@ -272,7 +272,16 @@ async def collect_notifier_state() -> NotifierState:
         await cursor.close()
         oldest_pending_ts = row[0] if row and row[0] is not None else None
 
-        cursor = await db.execute("SELECT MAX(created_at) FROM notification_outbox")
+        # Last attempt = most recent sent_at for attempted notifications.
+        # Falls back to MAX(created_at) if no sends have been attempted yet.
+        cursor = await db.execute(
+            """
+            SELECT COALESCE(
+                (SELECT MAX(sent_at) FROM notification_outbox WHERE sent_at IS NOT NULL),
+                (SELECT MAX(created_at) FROM notification_outbox)
+            )
+            """
+        )
         row = await cursor.fetchone()
         await cursor.close()
         last_attempt_ts = row[0] if row and row[0] is not None else 0
@@ -435,7 +444,9 @@ def _get_pm2_info() -> tuple[str, Optional[str], Optional[int]]:
     """Attempt to get pm2 process info via CLI.
 
     Returns:
-        Tuple of ("pm2", status_str_or_None, restart_count_or_None).
+        Tuple of ("pm2", status_str, restart_count) when this process is
+        managed by pm2, or ("none", None, None) when pm2 is installed but
+        not managing this process (subprocess fails or returns non-zero).
     """
     try:
         result = subprocess.run(
@@ -462,7 +473,8 @@ def _get_pm2_info() -> tuple[str, Optional[str], Optional[int]]:
             return "pm2", status, restarts
     except Exception:  # noqa: BLE001
         pass
-    return "pm2", None, None
+    # pm2 is installed but not managing this process (or CLI failed)
+    return "none", None, None
 
 
 def _collect_disk_metrics() -> tuple[float, float, int]:
@@ -544,19 +556,30 @@ async def _measure_event_loop_lag() -> Optional[float]:
         return None
 
 
+_persist_warning_logged = False  # Rate-limit the not-implemented warning
+
+
 async def _maybe_persist_snapshot(snapshot: StatusSnapshot) -> None:
     """Persist snapshot to SQLite if enabled in config (disabled by default).
 
     Args:
         snapshot: The snapshot to persist.
     """
+    global _persist_warning_logged
     try:
         from ..config.manager import get_config_manager  # noqa: PLC0415
 
         config = get_config_manager()
         if not config.get("observability.persist_snapshots"):
             return
-        # Full persistence implementation deferred — placeholder for future use
-        logger.debug("snapshot_persistence_skipped", reason="not_yet_implemented")
+        # Full persistence implementation deferred to a future story.
+        # Emit a one-time WARNING so operators know the flag has no effect yet.
+        if not _persist_warning_logged:
+            logger.warning(
+                "snapshot_persistence_not_implemented",
+                detail="observability.persist_snapshots=true has no effect yet; "
+                "persistence will be implemented in a future story.",
+            )
+            _persist_warning_logged = True
     except Exception:  # noqa: BLE001
         pass  # Config not initialized in tests — silently skip
