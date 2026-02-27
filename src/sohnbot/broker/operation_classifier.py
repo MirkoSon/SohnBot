@@ -42,8 +42,6 @@ def classify_tier(capability: str, action: str, file_count: int) -> int:
 
     # Git operations
     if capability == "git":
-        if action in {"status", "diff"}:
-            return 0  # Read-only (future stories)
         if action in {"rollback", "list_snapshots"}:
             return 1  # Single-repo modification / read-only list
         if action == "commit":

@@ -158,75 +158,79 @@ def create_sohnbot_mcp_server(broker, config):
         )
 
     # Git operations (Epic 2 - stubs for now)
-    @tool("git__status", "Get git status", {})
+    @tool("git__status", "Get git status", {"repo_path": str})
     async def git_status(args):
-        """Git status via broker (Epic 2 will implement actual capability)."""
+        """Git status via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
+        repo_path = args.get("repo_path")
 
-        logger.info("mcp_tool_invoked", tool="git__status", chat_id=chat_id)
+        logger.info("mcp_tool_invoked", tool="git__status", repo_path=repo_path, chat_id=chat_id)
 
         result = await broker.route_operation(
             capability="git",
             action="status",
-            params={},
+            params={"repo_path": repo_path, "timeout_seconds": 10},
             chat_id=chat_id
         )
 
         if not result.allowed:
             error_msg = result.error.get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__status", error=error_msg)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Operation denied: {error_msg}"
-                }]
-            }
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "Git status capability not yet implemented (Epic 2). "
-                    "This is a stub for testing gateway/runtime integration."
-                )
-            }]
-        }
+        data = result.result or {}
+        text = (
+            f"Branch: {data.get('branch', 'HEAD')}\n"
+            f"Ahead/Behind: +{data.get('ahead', 0)}/-{data.get('behind', 0)}\n"
+            f"Modified: {len(data.get('modified', []))}\n"
+            f"Staged: {len(data.get('staged', []))}\n"
+            f"Untracked: {len(data.get('untracked', []))}"
+        )
+        return _as_mcp_text(text)
 
-    @tool("git__diff", "Get git diff", {})
+    @tool(
+        "git__diff",
+        "Get git diff",
+        {"repo_path": str, "diff_type": str, "file_path": str, "commit_refs": list},
+    )
     async def git_diff(args):
-        """Git diff via broker (Epic 2 will implement actual capability)."""
+        """Git diff via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
+        repo_path = args.get("repo_path")
+        diff_type = args.get("diff_type", "working_tree")
+        file_path = args.get("file_path")
+        commit_refs = args.get("commit_refs")
 
-        logger.info("mcp_tool_invoked", tool="git__diff", chat_id=chat_id)
+        logger.info(
+            "mcp_tool_invoked",
+            tool="git__diff",
+            repo_path=repo_path,
+            diff_type=diff_type,
+            chat_id=chat_id,
+        )
 
         result = await broker.route_operation(
             capability="git",
             action="diff",
-            params={},
+            params={
+                "repo_path": repo_path,
+                "diff_type": diff_type,
+                "file_path": file_path,
+                "commit_refs": commit_refs,
+                "timeout_seconds": 30,
+            },
             chat_id=chat_id
         )
 
         if not result.allowed:
             error_msg = result.error.get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__diff", error=error_msg)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Operation denied: {error_msg}"
-                }]
-            }
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "Git diff capability not yet implemented (Epic 2). "
-                    "This is a stub for testing gateway/runtime integration."
-                )
-            }]
-        }
+        data = result.result or {}
+        return _as_mcp_text(data.get("diff", ""))
 
     @tool("git__commit", "Create git commit", {"message": str})
     async def git_commit(args):

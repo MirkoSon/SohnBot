@@ -208,7 +208,7 @@ async def test_execution_log_completeness(tmp_path, setup_database):
         capability="fs", action="list", params={"path": str(allowed_root)}, chat_id="chat1"
     )
     await router.route_operation(
-        capability="git", action="status", params={}, chat_id="chat2"
+        capability="git", action="status", params={"repo_path": str(allowed_root)}, chat_id="chat2"
     )
 
     # Verify all logged

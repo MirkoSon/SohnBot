@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 import structlog
 
 from ..capabilities.files import FileCapabilityError, FileOps, PatchEditor
-from ..capabilities.git import GitCapabilityError, SnapshotManager
+from ..capabilities.git import GitCapabilityError, SnapshotManager, git_diff, git_status
 from .operation_classifier import classify_tier
 from .scope_validator import ScopeValidator
 from ..persistence.audit import log_operation_start, log_operation_end
@@ -185,6 +185,34 @@ class BrokerRouter:
         # Git capability parameter validation and scope checking
         if capability == "git":
             # Validate required parameters
+            if action == "status" and "repo_path" not in params:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameter: repo_path",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+
+            if action == "diff" and "repo_path" not in params:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameter: repo_path",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+
             if action == "list_snapshots" and "repo_path" not in params:
                 self._operation_start_times.pop(operation_id, None)
                 return BrokerResult(
@@ -528,6 +556,19 @@ class BrokerRouter:
                 if self.config_manager
                 else 30
             )
+            if action == "status":
+                return await git_status(
+                    repo_path=params["repo_path"],
+                    timeout_seconds=int(params.get("timeout_seconds", 10)),
+                )
+            if action == "diff":
+                return await git_diff(
+                    repo_path=params["repo_path"],
+                    diff_type=params.get("diff_type", "working_tree"),
+                    file_path=params.get("file_path"),
+                    commit_refs=params.get("commit_refs"),
+                    timeout_seconds=int(params.get("timeout_seconds", 30)),
+                )
             if action == "list_snapshots":
                 return {"snapshots": self.snapshot_manager.list_snapshots(params["repo_path"])}
             if action == "rollback":
