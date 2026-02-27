@@ -61,7 +61,7 @@ development_status:
 
   epic-3: in-progress
   3-1-runtime-status-snapshot-collection: done
-  3-2-health-checks-implementation: backlog
+  3-2-health-checks-implementation: ready-for-dev
   3-3-system-status-via-telegram: backlog
   3-4-health-checks-via-telegram: backlog
   3-5-local-http-observability-server: backlog
