@@ -4,10 +4,11 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Coroutine, Dict, Optional
 import structlog
 
-from ..capabilities.files import FileCapabilityError, FileOps
+from ..capabilities.files import FileCapabilityError, FileOps, PatchEditor
+from ..capabilities.git import GitCapabilityError, SnapshotManager
 from .operation_classifier import classify_tier
 from .scope_validator import ScopeValidator
 from ..persistence.audit import log_operation_start, log_operation_end
@@ -31,17 +32,26 @@ class BrokerResult:
 class BrokerRouter:
     """Central routing and policy enforcement for all capabilities."""
 
-    def __init__(self, scope_validator: ScopeValidator, config_manager: Optional[ConfigManager] = None):
+    def __init__(
+        self,
+        scope_validator: ScopeValidator,
+        config_manager: Optional[ConfigManager] = None,
+        notifier: Optional[Callable[[str, str], Coroutine[Any, Any, None]]] = None,
+    ):
         """
         Initialize broker router.
 
         Args:
             scope_validator: ScopeValidator instance for path validation
             config_manager: ConfigManager instance for dynamic configuration (optional for tests)
+            notifier: Optional async callable(chat_id, message) for best-effort notifications
         """
         self.scope_validator = scope_validator
         self.config_manager = config_manager
+        self.notifier = notifier
         self.file_ops = FileOps()
+        self.patch_editor = PatchEditor()
+        self.snapshot_manager = SnapshotManager()
         self._operation_start_times: Dict[str, float] = {}
 
     async def route_operation(
@@ -83,7 +93,7 @@ class BrokerRouter:
         # 3. Validate scope (if file operation)
         if capability == "fs":
             # Validate required parameters
-            if action in {"read", "list", "search"} and "path" not in params:
+            if action in {"read", "list", "search", "apply_patch"} and "path" not in params:
                 self._operation_start_times.pop(operation_id, None)
                 return BrokerResult(
                     allowed=False,
@@ -110,6 +120,23 @@ class BrokerRouter:
                             "code": "invalid_request",
                             "message": "Missing or invalid required parameter: pattern",
                             "details": {"action": action, "pattern": pattern},
+                            "retryable": False,
+                        },
+                    )
+
+            # Validate patch content parameter
+            if action == "apply_patch":
+                patch_content = params.get("patch", "")
+                if not patch_content or not isinstance(patch_content, str):
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "Missing or invalid required parameter: patch",
+                            "details": {"action": action},
                             "retryable": False,
                         },
                     )
@@ -172,7 +199,9 @@ class BrokerRouter:
         try:
             if tier in (1, 2):
                 # Create git snapshot branch before execution
-                snapshot_ref = await self._create_snapshot(operation_id)
+                snapshot_ref = await self._create_snapshot(
+                    operation_id, file_path=params.get("path")
+                )
 
             # Execute capability with timeout from configuration
             timeout_seconds = (
@@ -182,8 +211,6 @@ class BrokerRouter:
             )
 
             async with asyncio.timeout(timeout_seconds):
-                # TODO: Route to actual capability implementations (Story 1.5+)
-                # For now, this is a placeholder - capabilities not yet implemented
                 result = await self._execute_capability(
                     capability, action, params
                 )
@@ -196,6 +223,17 @@ class BrokerRouter:
                 snapshot_ref=snapshot_ref,
                 duration_ms=duration_ms,
             )
+
+            # 8. Best-effort notification (Tier 1/2 operations)
+            if tier in (1, 2) and self.notifier:
+                await self._send_notification(
+                    chat_id=chat_id,
+                    capability=capability,
+                    action=action,
+                    params=params,
+                    result=result,
+                    snapshot_ref=snapshot_ref,
+                )
 
             return BrokerResult(
                 allowed=True,
@@ -225,7 +263,7 @@ class BrokerRouter:
                 },
             )
 
-        except FileCapabilityError as e:
+        except (FileCapabilityError, GitCapabilityError) as e:
             # Log operation end (capability validation/runtime error)
             duration_ms = self._calculate_duration(operation_id)
             await log_operation_end(
@@ -294,32 +332,39 @@ class BrokerRouter:
             return int(duration_seconds * 1000)
         return 0
 
-    async def _create_snapshot(self, operation_id: str) -> str:
+    async def _create_snapshot(
+        self, operation_id: str, file_path: Optional[str] = None
+    ) -> str:
         """
-        Create git snapshot branch before execution (PLACEHOLDER).
-
-        Actual git snapshot logic is implemented in Story 1.6.
-        For Story 1.2, this returns a mock snapshot reference.
+        Create git snapshot branch before execution via SnapshotManager.
 
         Args:
             operation_id: Operation UUID for snapshot naming
+            file_path: Path of the file being modified (used to find repo root)
 
         Returns:
             Snapshot branch reference
         """
-        # TODO: Implement actual git snapshot creation (Story 1.6)
-        # For now, return mock snapshot reference
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        snapshot_ref = f"snapshot/edit-{timestamp}-{operation_id[:8]}"
+        if not file_path:
+            raise GitCapabilityError(
+                code="snapshot_skipped",
+                message="No file path provided — cannot determine git repo for snapshot",
+                details={"operation_id": operation_id},
+                retryable=False,
+            )
 
-        logger.info(
-            "snapshot_created_placeholder",
-            operation_id=operation_id,
-            snapshot_ref=snapshot_ref,
-            note="Placeholder - actual git logic in Story 1.6",
+        timeout = (
+            self.config_manager.get("git.operation_timeout_seconds")
+            if self.config_manager
+            else 10
         )
 
-        return snapshot_ref
+        repo_path = self.snapshot_manager.find_repo_root(file_path)
+        return await self.snapshot_manager.create_snapshot(
+            repo_path=repo_path,
+            operation_id=operation_id,
+            timeout_seconds=timeout,
+        )
 
     async def _execute_capability_placeholder(
         self, capability: str, action: str, params: Dict[str, Any]
@@ -341,7 +386,7 @@ class BrokerRouter:
         Returns:
             Placeholder result dict
         """
-        logger.info(
+        logger.debug(
             "capability_execution_placeholder",
             capability=capability,
             action=action,
@@ -371,5 +416,61 @@ class BrokerRouter:
                     pattern=params.get("pattern", ""),
                     timeout_seconds=int(params.get("timeout_seconds", 5)),
                 )
+            if action == "apply_patch":
+                patch_max_kb = (
+                    self.config_manager.get("files.patch_max_size_kb")
+                    if self.config_manager
+                    else 50
+                )
+                return self.patch_editor.apply_patch(
+                    path=params["path"],
+                    patch_content=params["patch"],
+                    patch_max_size_kb=patch_max_kb,
+                )
 
         return await self._execute_capability_placeholder(capability, action, params)
+
+    async def _send_notification(
+        self,
+        chat_id: str,
+        capability: str,
+        action: str,
+        params: Dict[str, Any],
+        result: Optional[Dict[str, Any]],
+        snapshot_ref: Optional[str],
+    ) -> None:
+        """
+        Send best-effort Telegram notification after a Tier 1/2 operation.
+
+        Failures are logged but NEVER propagate to caller.
+        """
+        try:
+            if capability == "fs" and action == "apply_patch" and result:
+                file_path = result.get("path", params.get("path", "?"))
+                added = result.get("lines_added", 0)
+                removed = result.get("lines_removed", 0)
+                snap = snapshot_ref or "none"
+                message = (
+                    f"✅ Patch applied to {file_path}. "
+                    f"Snapshot: {snap}. Lines: +{added}/-{removed}"
+                )
+            else:
+                message = (
+                    f"✅ Operation {capability}.{action} completed."
+                    + (f" Snapshot: {snapshot_ref}" if snapshot_ref else "")
+                )
+
+            await self.notifier(chat_id, message)
+            logger.info(
+                "notification_sent",
+                chat_id=chat_id,
+                action=action,
+                snapshot_ref=snapshot_ref,
+            )
+        except Exception as exc:
+            logger.warning(
+                "notification_failed",
+                chat_id=chat_id,
+                action=action,
+                error=str(exc),
+            )
