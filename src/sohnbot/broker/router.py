@@ -8,7 +8,14 @@ from typing import Any, Dict, Optional
 import structlog
 
 from ..capabilities.files import FileCapabilityError, FileOps, PatchEditor
-from ..capabilities.git import GitCapabilityError, SnapshotManager, git_diff, git_status
+from ..capabilities.git import (
+    GitCapabilityError,
+    SnapshotManager,
+    git_checkout,
+    git_commit,
+    git_diff,
+    git_status,
+)
 from .operation_classifier import classify_tier
 from .scope_validator import ScopeValidator
 from ..persistence.audit import log_operation_start, log_operation_end
@@ -185,6 +192,34 @@ class BrokerRouter:
         # Git capability parameter validation and scope checking
         if capability == "git":
             # Validate required parameters
+            if action == "commit" and ("repo_path" not in params or "message" not in params):
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameters: repo_path and message",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+
+            if action == "checkout" and ("repo_path" not in params or "branch_name" not in params):
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameters: repo_path and branch_name",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+
             if action == "status" and "repo_path" not in params:
                 self._operation_start_times.pop(operation_id, None)
                 return BrokerResult(
@@ -214,6 +249,20 @@ class BrokerRouter:
                 )
 
             if action == "list_snapshots" and "repo_path" not in params:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameter: repo_path",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+
+            if action == "prune_snapshots" and "repo_path" not in params:
                 self._operation_start_times.pop(operation_id, None)
                 return BrokerResult(
                     allowed=False,
@@ -293,7 +342,7 @@ class BrokerRouter:
         snapshot_ref = None
         try:
             # Skip snapshot creation for git operations (they ARE the snapshot operations)
-            if tier in (1, 2) and not (capability == "git" and action in {"rollback", "list_snapshots"}):
+            if tier in (1, 2) and not (capability == "git" and action in {"rollback", "list_snapshots", "checkout", "commit", "prune_snapshots"}):
                 # Create git snapshot branch before execution
                 snapshot_ref = await self._create_snapshot(
                     operation_id, file_path=params.get("path")
@@ -328,6 +377,7 @@ class BrokerRouter:
                 params=params,
                 status="completed",
                 snapshot_ref=snapshot_ref,
+                result=result,
             )
 
             return BrokerResult(
@@ -355,6 +405,7 @@ class BrokerRouter:
                 params=params,
                 status="timeout",
                 snapshot_ref=snapshot_ref,
+                result=None,
             )
             return BrokerResult(
                 allowed=False,
@@ -384,6 +435,7 @@ class BrokerRouter:
                 params=params,
                 status="failed",
                 snapshot_ref=snapshot_ref,
+                result=None,
             )
             return BrokerResult(
                 allowed=False,
@@ -409,6 +461,7 @@ class BrokerRouter:
                 params=params,
                 status="failed",
                 snapshot_ref=snapshot_ref,
+                result=None,
             )
             return BrokerResult(
                 allowed=False,
@@ -569,8 +622,36 @@ class BrokerRouter:
                     commit_refs=params.get("commit_refs"),
                     timeout_seconds=int(params.get("timeout_seconds", 30)),
                 )
+            if action == "checkout":
+                return await git_checkout(
+                    repo_path=params["repo_path"],
+                    branch_name=params["branch_name"],
+                    timeout_seconds=int(params.get("timeout_seconds", timeout)),
+                )
+            if action == "commit":
+                return await git_commit(
+                    repo_path=params["repo_path"],
+                    message=params["message"],
+                    file_paths=params.get("file_paths"),
+                    timeout_seconds=int(params.get("timeout_seconds", timeout)),
+                )
             if action == "list_snapshots":
-                return {"snapshots": self.snapshot_manager.list_snapshots(params["repo_path"])}
+                snapshots = self.snapshot_manager.list_snapshots(params["repo_path"])
+                return {"snapshots": snapshots, "total_count": len(snapshots)}
+            if action == "prune_snapshots":
+                if "retention_days" in params and params.get("retention_days") is not None:
+                    retention_days = int(params["retention_days"])
+                else:
+                    retention_days = int(
+                        self.config_manager.get("snapshot.retention_days")
+                        if self.config_manager
+                        else 30
+                    )
+                return await self.snapshot_manager.prune_snapshots(
+                    repo_path=params["repo_path"],
+                    retention_days=retention_days,
+                    timeout_seconds=int(params.get("timeout_seconds", 60)),
+                )
             if action == "rollback":
                 return await self.snapshot_manager.rollback_to_snapshot(
                     repo_path=params["repo_path"],
@@ -588,7 +669,17 @@ class BrokerRouter:
         params: Dict[str, Any],
         status: str,
         snapshot_ref: Optional[str],
+        result: Optional[Dict[str, Any]] = None,
     ) -> str:
+        if capability == "git" and action == "commit" and status == "completed":
+            data = result or {}
+            commit_hash = data.get("commit_hash")
+            if not commit_hash:
+                return "ℹ️ No changes to commit"
+            message = data.get("message", params.get("message", ""))
+            files_changed = data.get("files_changed", 0)
+            return f"✅ Commit created: {commit_hash}. Message: \"{message}\". Files: {files_changed}"
+
         emoji = "✅" if status == "completed" else ("⏱️" if status == "timeout" else "❌")
         affected = params.get("paths") or params.get("path") or params.get("repo_path") or "-"
         message = f"{emoji} {capability}.{action} | files={affected} | result={status}"
@@ -605,6 +696,7 @@ class BrokerRouter:
         params: Dict[str, Any],
         status: str,
         snapshot_ref: Optional[str],
+        result: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Queue notification in persistent outbox without blocking operation result."""
         try:
@@ -617,6 +709,7 @@ class BrokerRouter:
                 params=params,
                 status=status,
                 snapshot_ref=snapshot_ref,
+                result=result,
             )
             await enqueue_notification(
                 operation_id=operation_id,

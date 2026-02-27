@@ -443,3 +443,140 @@ class TestRollbackToSnapshot:
         assert result["snapshot_ref"] == "snapshot/edit-2026-02-27-1430"
         assert result["commit_hash"] == "abc123"
         assert result["files_restored"] == 0
+
+
+# ---------------------------------------------------------------------------
+# prune_snapshots
+# ---------------------------------------------------------------------------
+
+class TestPruneSnapshots:
+    @pytest.mark.asyncio
+    async def test_prune_old_snapshots_success(self, manager, fake_repo):
+        old_ref = "snapshot/edit-2020-01-01-0000"
+        recent_ref = "snapshot/edit-2099-01-01-0000"
+        with patch.object(
+            manager,
+            "_run_git_async",
+            AsyncMock(
+                side_effect=[
+                    (0, f"  {old_ref}\n  {recent_ref}\n", ""),
+                    (0, "main\n", ""),
+                    (0, "", ""),
+                ]
+            ),
+        ):
+            result = await manager.prune_snapshots(str(fake_repo), retention_days=30, timeout_seconds=60)
+
+        assert result["pruned_count"] == 1
+        assert old_ref in result["pruned_refs"]
+        assert result["retained_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_prune_snapshots_with_retention_days_parameter(self, manager, fake_repo):
+        old_ref = "snapshot/edit-2024-01-01-0000"
+        with patch.object(
+            manager,
+            "_run_git_async",
+            AsyncMock(
+                side_effect=[
+                    (0, f"  {old_ref}\n", ""),
+                    (0, "main\n", ""),
+                    (0, "", ""),
+                ]
+            ),
+        ):
+            result = await manager.prune_snapshots(str(fake_repo), retention_days=1, timeout_seconds=60)
+
+        assert result["pruned_count"] == 1
+        assert old_ref in result["pruned_refs"]
+
+    @pytest.mark.asyncio
+    async def test_prune_snapshots_with_no_snapshots(self, manager, fake_repo):
+        with patch.object(manager, "_run_git_async", AsyncMock(return_value=(0, "", ""))):
+            result = await manager.prune_snapshots(str(fake_repo))
+        assert result == {"pruned_count": 0, "pruned_refs": [], "retained_count": 0}
+
+    @pytest.mark.asyncio
+    async def test_prune_snapshots_with_all_recent_snapshots(self, manager, fake_repo):
+        recent_ref = "snapshot/edit-2099-12-31-2359"
+        with patch.object(
+            manager,
+            "_run_git_async",
+            AsyncMock(
+                side_effect=[
+                    (0, f"  {recent_ref}\n", ""),
+                    (0, "main\n", ""),
+                ]
+            ),
+        ):
+            result = await manager.prune_snapshots(str(fake_repo), retention_days=30)
+        assert result["pruned_count"] == 0
+        assert result["retained_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_prune_snapshots_skips_current_branch(self, manager, fake_repo):
+        current_ref = "snapshot/edit-2020-01-01-0000"
+        mock_run = AsyncMock(
+            side_effect=[
+                (0, f"  {current_ref}\n", ""),
+                (0, f"{current_ref}\n", ""),
+            ]
+        )
+        with patch.object(manager, "_run_git_async", mock_run):
+            result = await manager.prune_snapshots(str(fake_repo), retention_days=1)
+        assert result["pruned_count"] == 0
+        assert result["retained_count"] == 1
+        assert mock_run.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_prune_snapshots_handles_unparseable_branch_names(self, manager, fake_repo):
+        bad_ref = "snapshot/edit-not-a-timestamp"
+        with patch.object(
+            manager,
+            "_run_git_async",
+            AsyncMock(
+                side_effect=[
+                    (0, f"  {bad_ref}\n", ""),
+                    (0, "main\n", ""),
+                ]
+            ),
+        ):
+            result = await manager.prune_snapshots(str(fake_repo), retention_days=30)
+        assert result["pruned_count"] == 0
+        assert result["retained_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_prune_snapshots_timeout_handling(self, manager, fake_repo):
+        with patch.object(
+            manager,
+            "_run_git_async",
+            AsyncMock(
+                side_effect=GitCapabilityError(
+                    code="prune_timeout",
+                    message="timed out",
+                    details={"repo_path": str(fake_repo)},
+                    retryable=True,
+                )
+            ),
+        ):
+            with pytest.raises(GitCapabilityError) as exc_info:
+                await manager.prune_snapshots(str(fake_repo), retention_days=30, timeout_seconds=1)
+        assert exc_info.value.code == "prune_timeout"
+
+    @pytest.mark.asyncio
+    async def test_prune_snapshots_git_binary_not_found(self, manager, fake_repo):
+        with patch.object(
+            manager,
+            "_run_git_async",
+            AsyncMock(
+                side_effect=GitCapabilityError(
+                    code="git_not_found",
+                    message="git missing",
+                    details={},
+                    retryable=False,
+                )
+            ),
+        ):
+            with pytest.raises(GitCapabilityError) as exc_info:
+                await manager.prune_snapshots(str(fake_repo), retention_days=30)
+        assert exc_info.value.code == "git_not_found"

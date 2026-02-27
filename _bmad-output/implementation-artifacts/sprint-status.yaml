@@ -52,12 +52,12 @@ development_status:
   1-9-ambiguous-request-postponement: done
   epic-1-retrospective: done
 
-  epic-2: in-progress
-  2-1-git-status-diff-queries: review
-  2-2-git-checkout-for-rollback-operations: backlog
-  2-3-autonomous-git-commits: backlog
-  2-4-enhanced-snapshot-branch-management: backlog
-  epic-2-retrospective: optional
+  epic-2: done
+  2-1-git-status-diff-queries: done
+  2-2-git-checkout-for-rollback-operations: done
+  2-3-autonomous-git-commits: done
+  2-4-enhanced-snapshot-branch-management: done
+  epic-2-retrospective: done
 
   epic-3: backlog
   3-1-runtime-status-snapshot-collection: backlog

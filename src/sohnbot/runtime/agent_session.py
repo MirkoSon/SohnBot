@@ -79,6 +79,7 @@ class AgentSession:
                 "mcp__sohnbot__git__diff",
                 "mcp__sohnbot__git__commit",
                 "mcp__sohnbot__git__rollback",
+                "mcp__sohnbot__git__checkout",
             ],
             hooks={
                 "PreToolUse": [validate_tool_use]

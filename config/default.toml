@@ -48,8 +48,12 @@ search_timeout_seconds = 5
 
 [git]
 # Git operation configuration (DYNAMIC - hot-reloadable)
-snapshot_retention_days = 30
 operation_timeout_seconds = 10
+
+[snapshot]
+# Retention period for snapshot branches (in days)
+# Snapshots older than this are pruned by git.prune_snapshots
+retention_days = 30
 
 [scheduler]
 # Scheduler configuration (DYNAMIC - hot-reloadable)

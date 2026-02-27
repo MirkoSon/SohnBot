@@ -232,41 +232,50 @@ def create_sohnbot_mcp_server(broker, config):
         data = result.result or {}
         return _as_mcp_text(data.get("diff", ""))
 
-    @tool("git__commit", "Create git commit", {"message": str})
+    @tool(
+        "git__commit",
+        "Create git commit",
+        {"repo_path": str, "message": str, "file_paths": list},
+    )
     async def git_commit(args):
-        """Git commit via broker (Epic 2 will implement actual capability)."""
+        """Git commit via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
 
+        repo_path = args.get("repo_path")
         message = args.get("message")
-        logger.info("mcp_tool_invoked", tool="git__commit", message=message, chat_id=chat_id)
+        file_paths = args.get("file_paths")
+        logger.info(
+            "mcp_tool_invoked",
+            tool="git__commit",
+            repo_path=repo_path,
+            message=message,
+            chat_id=chat_id,
+        )
 
         result = await broker.route_operation(
             capability="git",
             action="commit",
-            params={"message": message},
+            params={
+                "repo_path": repo_path,
+                "message": message,
+                "file_paths": file_paths,
+                "timeout_seconds": 30,
+            },
             chat_id=chat_id
         )
 
         if not result.allowed:
             error_msg = result.error.get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__commit", error=error_msg)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Operation denied: {error_msg}"
-                }]
-            }
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "Git commit capability not yet implemented (Epic 2). "
-                    "This is a stub for testing gateway/runtime integration."
-                )
-            }]
-        }
+        data = result.result or {}
+        if not data.get("commit_hash"):
+            return _as_mcp_text("ℹ️ No changes to commit")
+        return _as_mcp_text(
+            f"✅ Commit created: {data.get('commit_hash')}. Message: \"{data.get('message', message)}\". Files: {data.get('files_changed', 0)}"
+        )
 
     @tool("git__list_snapshots", "List available snapshot branches", {"repo_path": str})
     async def git_list_snapshots(args):
@@ -290,14 +299,57 @@ def create_sohnbot_mcp_server(broker, config):
             return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
         snapshots = result.result.get("snapshots", [])
+        total_count = result.result.get("total_count", len(snapshots))
         if not snapshots:
             return _as_mcp_text("No snapshots found.")
 
-        lines = ["Available snapshots:"]
+        lines = [f"Available snapshots (total: {total_count}):"]
         for i, snap in enumerate(snapshots, 1):
             lines.append(f"{i}. {snap['ref']} ({snap['timestamp']})")
 
         return _as_mcp_text("\n".join(lines))
+
+    @tool(
+        "git__prune_snapshots",
+        "Prune old snapshot branches",
+        {"repo_path": str, "retention_days": int},
+    )
+    async def git_prune_snapshots(args):
+        """Prune old snapshots via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+
+        repo_path = args.get("repo_path")
+        retention_days = args.get("retention_days")
+        logger.info(
+            "mcp_tool_invoked",
+            tool="git__prune_snapshots",
+            repo_path=repo_path,
+            retention_days=retention_days,
+            chat_id=chat_id,
+        )
+
+        result = await broker.route_operation(
+            capability="git",
+            action="prune_snapshots",
+            params={
+                "repo_path": repo_path,
+                "retention_days": retention_days,
+                "timeout_seconds": 60,
+            },
+            chat_id=chat_id
+        )
+
+        if not result.allowed:
+            error_msg = result.error.get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="git__prune_snapshots", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+
+        data = result.result or {}
+        return _as_mcp_text(
+            f"✅ Snapshot prune completed. Pruned: {data.get('pruned_count', 0)}. "
+            f"Retained: {data.get('retained_count', 0)}."
+        )
 
     @tool("git__rollback", "Rollback to snapshot", {"snapshot_ref": str, "repo_path": str})
     async def git_rollback(args):
@@ -334,6 +386,47 @@ def create_sohnbot_mcp_server(broker, config):
             f"✅ Restored to snapshot: {snapshot_ref}. Commit: {commit_hash}. Files: {files_restored}"
         )
 
+    @tool(
+        "git__checkout",
+        "Checkout local git branch (local branches only)",
+        {"repo_path": str, "branch_name": str},
+    )
+    async def git_checkout(args):
+        """Checkout local branch via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+
+        repo_path = args.get("repo_path")
+        branch_name = args.get("branch_name")
+        logger.info(
+            "mcp_tool_invoked",
+            tool="git__checkout",
+            repo_path=repo_path,
+            branch_name=branch_name,
+            chat_id=chat_id,
+        )
+
+        result = await broker.route_operation(
+            capability="git",
+            action="checkout",
+            params={
+                "repo_path": repo_path,
+                "branch_name": branch_name,
+                "timeout_seconds": 10,
+            },
+            chat_id=chat_id
+        )
+
+        if not result.allowed:
+            error_msg = result.error.get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="git__checkout", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+
+        data = result.result or {}
+        return _as_mcp_text(
+            f"✅ Checked out local branch {data.get('branch', branch_name)} at {data.get('commit_hash', '?')}"
+        )
+
     # Create and return server
     return create_sdk_mcp_server(
         name="sohnbot",
@@ -350,6 +443,8 @@ def create_sohnbot_mcp_server(broker, config):
             git_diff,
             git_commit,
             git_list_snapshots,
+            git_prune_snapshots,
             git_rollback,
+            git_checkout,
         ]
     )

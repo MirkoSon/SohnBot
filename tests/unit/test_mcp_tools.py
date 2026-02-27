@@ -119,7 +119,10 @@ class TestPreToolUseHook:
             "mcp__sohnbot__git__status",
             "mcp__sohnbot__git__diff",
             "mcp__sohnbot__git__commit",
+            "mcp__sohnbot__git__list_snapshots",
+            "mcp__sohnbot__git__prune_snapshots",
             "mcp__sohnbot__git__rollback",
+            "mcp__sohnbot__git__checkout",
         ]
 
         for tool_name in tool_names:

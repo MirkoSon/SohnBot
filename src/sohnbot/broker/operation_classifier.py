@@ -25,6 +25,7 @@ def classify_tier(capability: str, action: str, file_count: int) -> int:
         ("fs", "search"),
         ("git", "status"),
         ("git", "diff"),
+        ("git", "list_snapshots"),
         ("web", "search"),
         ("profiles", "lint"),  # Read-only execution
     }
@@ -34,18 +35,14 @@ def classify_tier(capability: str, action: str, file_count: int) -> int:
     # Tier 1: Single-file modifications (automatic snapshot)
     SINGLE_FILE_ACTIONS = {
         ("fs", "apply_patch"),  # Single-file patch
-        ("git", "commit"),  # Commit after validation
-        ("git", "checkout"),  # Branch switching (for rollback)
     }
     if (capability, action) in SINGLE_FILE_ACTIONS and file_count == 1:
         return 1
 
     # Git operations
     if capability == "git":
-        if action in {"rollback", "list_snapshots"}:
-            return 1  # Single-repo modification / read-only list
-        if action == "commit":
-            return 2  # Multi-file modification (future stories)
+        if action in {"checkout", "rollback", "commit", "prune_snapshots"}:
+            return 1  # Local branch switch (state-changing)
 
     # Tier 2: Multi-file modifications (comprehensive snapshot)
     if file_count > 1:

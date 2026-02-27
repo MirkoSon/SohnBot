@@ -92,6 +92,7 @@ def test_classify_tier_0_read_operations():
     assert classify_tier("fs", "search", 0) == 0
     assert classify_tier("git", "status", 0) == 0
     assert classify_tier("git", "diff", 0) == 0
+    assert classify_tier("git", "list_snapshots", 0) == 0
     assert classify_tier("web", "search", 0) == 0
     assert classify_tier("profiles", "lint", 0) == 0
 
@@ -101,6 +102,8 @@ def test_classify_tier_1_single_file():
     assert classify_tier("fs", "apply_patch", 1) == 1
     assert classify_tier("git", "commit", 1) == 1
     assert classify_tier("git", "checkout", 1) == 1
+    assert classify_tier("git", "prune_snapshots", 0) == 1
+    assert classify_tier("git", "checkout", 0) == 1
 
 
 def test_classify_tier_2_multi_file():

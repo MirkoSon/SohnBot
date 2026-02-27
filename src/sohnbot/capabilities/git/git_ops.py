@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+import re
 from typing import Any
 
 from .snapshot_manager import GitCapabilityError
@@ -188,4 +190,249 @@ async def git_diff(
         "file_path": file_path,
         "commit_refs": list(commit_refs) if commit_refs else None,
         "diff": stdout,
+    }
+
+
+def _validate_local_branch(branch_name: str) -> None:
+    if branch_name.startswith(("origin/", "remotes/", "refs/remotes/")):
+        raise GitCapabilityError(
+            code="invalid_branch",
+            message="Branch checkout restricted to local branches only. Remote checkout not permitted.",
+            details={"branch_name": branch_name},
+            retryable=False,
+        )
+    if "../" in branch_name or "..\\" in branch_name:
+        raise GitCapabilityError(
+            code="invalid_branch",
+            message="Invalid branch name",
+            details={"branch_name": branch_name},
+            retryable=False,
+        )
+    if any(token in branch_name for token in ("~", "^", "@{")):
+        raise GitCapabilityError(
+            code="invalid_branch",
+            message="Branch checkout requires simple local branch names only.",
+            details={"branch_name": branch_name},
+            retryable=False,
+        )
+    if branch_name.startswith(("/", "-")):
+        raise GitCapabilityError(
+            code="invalid_branch",
+            message="Invalid branch name format",
+            details={"branch_name": branch_name},
+            retryable=False,
+        )
+    if not re.match(r"^[a-zA-Z0-9_][a-zA-Z0-9_/-]*$", branch_name):
+        raise GitCapabilityError(
+            code="invalid_branch",
+            message="Invalid branch name format",
+            details={"branch_name": branch_name},
+            retryable=False,
+        )
+
+
+async def git_checkout(
+    repo_path: str,
+    branch_name: str,
+    timeout_seconds: int = 10,
+) -> dict[str, Any]:
+    """Checkout a local branch and return resulting branch and commit hash."""
+    _validate_local_branch(branch_name)
+
+    try:
+        await _run_git_command(
+            cmd=["git", "-C", repo_path, "switch", "--", branch_name],
+            repo_path=repo_path,
+            timeout_seconds=timeout_seconds,
+            timeout_code="checkout_timeout",
+        )
+    except GitCapabilityError as exc:
+        if exc.code == "git_command_failed":
+            stderr = (exc.details or {}).get("stderr", "")
+            lower = str(stderr).lower()
+            if "pathspec" in lower or "did not match any file" in lower or "invalid reference" in lower:
+                raise GitCapabilityError(
+                    code="checkout_failed",
+                    message="Branch checkout failed. Branch does not exist locally.",
+                    details={"repo_path": repo_path, "branch_name": branch_name, "stderr": stderr},
+                    retryable=False,
+                ) from exc
+            raise GitCapabilityError(
+                code="checkout_failed",
+                message="Branch checkout failed",
+                details={"repo_path": repo_path, "branch_name": branch_name, "stderr": stderr},
+                retryable=False,
+            ) from exc
+        if exc.code == "checkout_timeout":
+            raise
+        raise
+
+    head_stdout, _ = await _run_git_command(
+        cmd=["git", "-C", repo_path, "rev-parse", "--short", "HEAD"],
+        repo_path=repo_path,
+        timeout_seconds=5,
+        timeout_code="checkout_timeout",
+    )
+
+    return {
+        "branch": branch_name,
+        "commit_hash": head_stdout.strip(),
+    }
+
+
+def _validate_commit_message(message: str) -> None:
+    msg = (message or "").strip()
+    if not msg:
+        raise GitCapabilityError(
+            code="invalid_commit_message",
+            message="Commit message cannot be empty",
+            details={"message": message},
+            retryable=False,
+        )
+
+    # Accept "Type: Summary" and "[Type]: Summary" for compatibility.
+    pattern = r"^(?:\[(Fix|Feat|Refactor|Docs|Test|Chore|Style)\]|(Fix|Feat|Refactor|Docs|Test|Chore|Style)):\s+.+$"
+    if not re.match(pattern, msg):
+        raise GitCapabilityError(
+            code="invalid_commit_message",
+            message="Commit message must follow format: [Type]: [Summary]",
+            details={"message": message, "expected_format": "[Type]: [Summary]"},
+            retryable=False,
+        )
+
+    first_line = msg.split("\n", 1)[0]
+    if len(first_line) > 72:
+        raise GitCapabilityError(
+            code="invalid_commit_message",
+            message="Commit message first line should be <= 72 characters",
+            details={"message": message, "length": len(first_line)},
+            retryable=False,
+        )
+    if len(msg) > 4096:
+        raise GitCapabilityError(
+            code="invalid_commit_message",
+            message="Commit message must be <= 4096 characters",
+            details={"message_length": len(msg), "max_length": 4096},
+            retryable=False,
+        )
+
+
+def _validate_commit_file_path(repo_path: str, file_path: str) -> str:
+    """
+    Validate and normalize a commit path to a repo-relative path.
+
+    This rejects traversal, option-like paths, and targets outside the repo root.
+    """
+    path = (file_path or "").strip()
+    if not path:
+        raise GitCapabilityError(
+            code="invalid_commit_file_path",
+            message="Commit file path cannot be empty",
+            details={"file_path": file_path},
+            retryable=False,
+        )
+    if path.startswith("-"):
+        raise GitCapabilityError(
+            code="invalid_commit_file_path",
+            message="Commit file path cannot start with '-'",
+            details={"file_path": file_path},
+            retryable=False,
+        )
+
+    repo_root = Path(repo_path).resolve(strict=False)
+    candidate = Path(path)
+    absolute_candidate = (repo_root / candidate).resolve(strict=False) if not candidate.is_absolute() else candidate.resolve(strict=False)
+
+    try:
+        rel = absolute_candidate.relative_to(repo_root)
+    except ValueError as exc:
+        raise GitCapabilityError(
+            code="invalid_commit_file_path",
+            message="Commit file path must be inside repository root",
+            details={"file_path": file_path, "repo_path": repo_path},
+            retryable=False,
+        ) from exc
+
+    if any(part == ".." for part in rel.parts):
+        raise GitCapabilityError(
+            code="invalid_commit_file_path",
+            message="Commit file path cannot contain parent traversal segments",
+            details={"file_path": file_path},
+            retryable=False,
+        )
+
+    return str(rel)
+
+
+async def git_commit(
+    repo_path: str,
+    message: str,
+    file_paths: list[str] | None = None,
+    timeout_seconds: int = 30,
+) -> dict[str, Any]:
+    """Create a git commit with optional scoped file staging."""
+    _validate_commit_message(message)
+
+    if file_paths:
+        for path in file_paths:
+            normalized_path = _validate_commit_file_path(repo_path, path)
+            await _run_git_command(
+                cmd=["git", "-C", repo_path, "add", "--", normalized_path],
+                repo_path=repo_path,
+                timeout_seconds=10,
+                timeout_code="commit_timeout",
+            )
+    else:
+        # Safer default than add -A: stage tracked-file modifications/deletions only.
+        await _run_git_command(
+            cmd=["git", "-C", repo_path, "add", "-u"],
+            repo_path=repo_path,
+            timeout_seconds=10,
+            timeout_code="commit_timeout",
+        )
+
+    try:
+        await _run_git_command(
+            cmd=["git", "-C", repo_path, "commit", "-m", message],
+            repo_path=repo_path,
+            timeout_seconds=timeout_seconds,
+            timeout_code="commit_timeout",
+        )
+    except GitCapabilityError as exc:
+        if exc.code == "git_command_failed":
+            stderr = ((exc.details or {}).get("stderr", "") or "").lower()
+            if "nothing to commit" in stderr or "no changes added to commit" in stderr:
+                return {
+                    "commit_hash": None,
+                    "message": "No changes to commit",
+                    "files_changed": 0,
+                }
+            raise GitCapabilityError(
+                code="commit_failed",
+                message="Git commit failed",
+                details={"repo_path": repo_path, "stderr": (exc.details or {}).get("stderr", "")},
+                retryable=False,
+            ) from exc
+        if exc.code == "commit_timeout":
+            raise
+        raise
+
+    hash_stdout, _ = await _run_git_command(
+        cmd=["git", "-C", repo_path, "rev-parse", "--short", "HEAD"],
+        repo_path=repo_path,
+        timeout_seconds=5,
+        timeout_code="commit_timeout",
+    )
+    files_stdout, _ = await _run_git_command(
+        cmd=["git", "-C", repo_path, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+        repo_path=repo_path,
+        timeout_seconds=5,
+        timeout_code="commit_timeout",
+    )
+    files_changed = len([line for line in files_stdout.splitlines() if line.strip()])
+
+    return {
+        "commit_hash": hash_stdout.strip(),
+        "message": message,
+        "files_changed": files_changed,
     }

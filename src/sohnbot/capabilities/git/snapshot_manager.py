@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -240,37 +240,25 @@ class SnapshotManager:
 
             # Parse timestamp from branch name: snapshot/edit-YYYY-MM-DD-HHMM(-suffix)?
             try:
-                # Extract the timestamp part
-                parts = branch_name.split("snapshot/edit-")[1]
-                # Handle optional suffix: split on first 4 dashes to get YYYY-MM-DD-HHMM
-                timestamp_parts = parts.split("-")
-                if len(timestamp_parts) >= 4:
-                    # Reconstruct: YYYY-MM-DD-HHMM
-                    year = timestamp_parts[0]
-                    month = timestamp_parts[1]
-                    day = timestamp_parts[2]
-                    time = timestamp_parts[3]
-
-                    # Parse to datetime for sorting and formatting
-                    from datetime import datetime
-                    dt = datetime.strptime(f"{year}-{month}-{day}-{time}", "%Y-%m-%d-%H%M")
-
-                    # Format as "Feb 27, 2026 14:30 UTC"
-                    formatted = dt.strftime("%b %d, %Y %H:%M UTC")
-
-                    snapshots.append({
-                        "ref": branch_name,
-                        "timestamp": formatted,
-                        "_datetime": dt,  # For sorting
-                    })
+                dt = self._parse_snapshot_datetime(branch_name)
+                formatted = dt.strftime("%b %d, %Y %H:%M UTC")
+                snapshots.append({
+                    "ref": branch_name,
+                    "timestamp": formatted,
+                    "_datetime": dt,  # For sorting
+                })
             except (IndexError, ValueError) as exc:
-                # Skip branches with unparseable names
+                # Keep unparseable branches visible for observability and pruning safety.
                 logger.warning(
                     "snapshot_name_parse_failed",
                     branch_name=branch_name,
                     error=str(exc),
                 )
-                continue
+                snapshots.append({
+                    "ref": branch_name,
+                    "timestamp": "Unknown",
+                    "_datetime": datetime.min.replace(tzinfo=timezone.utc),
+                })
 
         # Sort by datetime descending (newest first)
         snapshots.sort(key=lambda x: x["_datetime"], reverse=True)
@@ -279,6 +267,217 @@ class SnapshotManager:
         for snap in snapshots:
             del snap["_datetime"]
 
+        logger.info(
+            "snapshots_listed",
+            repo_path=repo_path,
+            snapshot_count=len(snapshots),
+        )
+
+        return snapshots
+
+    async def prune_snapshots(
+        self,
+        repo_path: str,
+        retention_days: int = 30,
+        timeout_seconds: int = 60,
+    ) -> dict[str, Any]:
+        """Prune snapshot branches older than retention_days."""
+        if retention_days <= 0:
+            raise GitCapabilityError(
+                code="invalid_retention_days",
+                message="Retention days must be greater than 0",
+                details={"retention_days": retention_days},
+                retryable=False,
+            )
+
+        start_time = datetime.now(timezone.utc)
+        deadline = start_time + timedelta(seconds=timeout_seconds)
+        snapshots = await self._list_snapshots_for_prune(repo_path, deadline)
+        if not snapshots:
+            return {"pruned_count": 0, "pruned_refs": [], "retained_count": 0}
+
+        try:
+            _, stdout_text, _ = await self._run_git_async(
+                ["git", "-C", repo_path, "branch", "--show-current"],
+                repo_path=repo_path,
+                deadline=deadline,
+                timeout_code="prune_timeout",
+            )
+            current_branch = stdout_text.strip()
+        except GitCapabilityError as exc:
+            if exc.code in {"prune_timeout", "git_not_found"}:
+                raise
+            current_branch = ""
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        pruned_refs: list[str] = []
+        retained_count = 0
+
+        for snapshot in snapshots:
+            ref = snapshot["ref"]
+            if ref == current_branch:
+                retained_count += 1
+                logger.info("snapshot_prune_skipped_current", ref=ref)
+                continue
+
+            try:
+                snapshot_date = self._parse_snapshot_datetime(ref)
+            except (IndexError, ValueError) as exc:
+                retained_count += 1
+                logger.warning("snapshot_timestamp_parse_failed", ref=ref, error=str(exc))
+                continue
+
+            if snapshot_date >= cutoff:
+                retained_count += 1
+                continue
+
+            try:
+                returncode, _, stderr_text = await self._run_git_async(
+                    ["git", "-C", repo_path, "branch", "-D", ref],
+                    repo_path=repo_path,
+                    deadline=deadline,
+                    timeout_code="prune_timeout",
+                )
+            except GitCapabilityError as exc:
+                if exc.code == "prune_timeout":
+                    retained_count += 1
+                    logger.warning("snapshot_prune_timeout", ref=ref)
+                    continue
+                retained_count += 1
+                logger.warning("snapshot_prune_failed", ref=ref, error=exc.message)
+                continue
+
+            if returncode == 0:
+                pruned_refs.append(ref)
+                logger.info("snapshot_pruned", repo_path=repo_path, ref=ref)
+            else:
+                retained_count += 1
+                logger.warning(
+                    "snapshot_prune_failed",
+                    ref=ref,
+                    stderr=stderr_text,
+                )
+
+        result = {
+            "pruned_count": len(pruned_refs),
+            "pruned_refs": pruned_refs,
+            "retained_count": retained_count,
+        }
+        logger.info(
+            "snapshots_pruned",
+            repo_path=repo_path,
+            retention_days=retention_days,
+            pruned_count=result["pruned_count"],
+            retained_count=result["retained_count"],
+        )
+        return result
+
+    def _parse_snapshot_datetime(self, snapshot_ref: str) -> datetime:
+        parts = snapshot_ref.split("snapshot/edit-")[1]
+        timestamp_parts = parts.split("-")
+        if len(timestamp_parts) < 4:
+            raise ValueError("invalid snapshot timestamp format")
+        date_text = (
+            f"{timestamp_parts[0]}-"
+            f"{timestamp_parts[1]}-"
+            f"{timestamp_parts[2]}-"
+            f"{timestamp_parts[3]}"
+        )
+        parsed = datetime.strptime(date_text, "%Y-%m-%d-%H%M")
+        return parsed.replace(tzinfo=timezone.utc)
+
+    async def _run_git_async(
+        self,
+        cmd: list[str],
+        repo_path: str,
+        deadline: datetime,
+        timeout_code: str,
+    ) -> tuple[int, str, str]:
+        remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
+            raise GitCapabilityError(
+                code=timeout_code,
+                message="Git prune operation timed out",
+                details={"repo_path": repo_path, "command": cmd},
+                retryable=True,
+            )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError as exc:
+            raise GitCapabilityError(
+                code="git_not_found",
+                message="git CLI is required for snapshot operations",
+                details={"repo_path": repo_path},
+                retryable=False,
+            ) from exc
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                process.communicate(),
+                timeout=remaining,
+            )
+        except asyncio.TimeoutError as exc:
+            process.kill()
+            await process.wait()
+            raise GitCapabilityError(
+                code=timeout_code,
+                message="Git prune operation timed out",
+                details={"repo_path": repo_path, "command": cmd},
+                retryable=True,
+            ) from exc
+
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace").strip()
+        return process.returncode, stdout, stderr
+
+    async def _list_snapshots_for_prune(
+        self,
+        repo_path: str,
+        deadline: datetime,
+    ) -> list[dict[str, Any]]:
+        returncode, stdout, stderr = await self._run_git_async(
+            ["git", "-C", repo_path, "branch", "--list", "snapshot/*"],
+            repo_path=repo_path,
+            deadline=deadline,
+            timeout_code="prune_timeout",
+        )
+        if returncode != 0:
+            raise GitCapabilityError(
+                code="prune_failed",
+                message="Failed to list snapshot branches for pruning",
+                details={"repo_path": repo_path, "stderr": stderr},
+                retryable=False,
+            )
+        if not stdout.strip():
+            return []
+
+        snapshots: list[dict[str, Any]] = []
+        for line in stdout.splitlines():
+            branch_name = line.strip()
+            if not branch_name:
+                continue
+            try:
+                dt = self._parse_snapshot_datetime(branch_name)
+                formatted = dt.strftime("%b %d, %Y %H:%M UTC")
+                snapshots.append({"ref": branch_name, "timestamp": formatted})
+            except (IndexError, ValueError) as exc:
+                logger.warning(
+                    "snapshot_name_parse_failed",
+                    branch_name=branch_name,
+                    error=str(exc),
+                )
+                snapshots.append({"ref": branch_name, "timestamp": "Unknown"})
+        snapshots.sort(
+            key=lambda snap: (
+                self._parse_snapshot_datetime(snap["ref"])
+                if snap["timestamp"] != "Unknown"
+                else datetime.min.replace(tzinfo=timezone.utc)
+            ),
+            reverse=True,
+        )
         return snapshots
 
     async def rollback_to_snapshot(

@@ -131,19 +131,19 @@ REGISTRY: dict[str, ConfigKey] = {
     ),
 
     # ===== GIT OPERATIONS (Dynamic - Performance tuning) =====
-    "git.snapshot_retention_days": ConfigKey(
-        tier="dynamic",
-        value_type=int,
-        default=30,
-        min_value=1,
-        max_value=90,
-    ),
     "git.operation_timeout_seconds": ConfigKey(
         tier="dynamic",
         value_type=int,
         default=10,
         min_value=1,
         max_value=60,
+    ),
+    "snapshot.retention_days": ConfigKey(
+        tier="dynamic",
+        value_type=int,
+        default=30,
+        min_value=1,
+        max_value=365,
     ),
 
     # ===== SCHEDULER (Dynamic - Operational tuning) =====
