@@ -19,8 +19,8 @@ SohnBot is an autonomous agent that executes file operations, git commands, sche
 
 - Python 3.13+
 - Poetry
-- Git
-- ripgrep (rg) - Required for file search operations
+- Git 2.x+ — **runtime dependency** required for snapshot branch creation (must be in PATH)
+- ripgrep (`rg`) — required for file search operations (must be in PATH)
 - Telegram Bot Token (from @BotFather)
 - Anthropic API Key
 - Brave Search API Key (optional, for web search)
@@ -29,6 +29,18 @@ SohnBot is an autonomous agent that executes file operations, git commands, sche
 
 ```bash
 # Install system dependencies
+
+# git (required at runtime for snapshot operations)
+# On macOS — usually pre-installed; if not:
+brew install git
+
+# On Ubuntu/Debian
+sudo apt-get install git
+
+# On Windows (via Chocolatey)
+choco install git
+
+# ripgrep (required at runtime for file search)
 # On macOS
 brew install ripgrep
 
@@ -49,6 +61,17 @@ cp .env.example .env
 # TELEGRAM_BOT_TOKEN=your_token_here
 # BRAVE_API_KEY=your_key_here
 ```
+
+## Runtime CLI Dependencies
+
+SohnBot shells out to the following CLI tools at runtime. Both must be available in PATH when the bot process starts:
+
+| Tool | Used for | Fails if missing |
+|------|----------|------------------|
+| `git` | Snapshot branch creation before file edits (FR-005) | Patch operations raise `git_not_found` |
+| `rg` (ripgrep) | File content search (FR-009) | Search operations raise `search_failed` |
+
+> **Windows note:** Git for Windows installs `git.exe` to PATH automatically. ripgrep must be installed separately.
 
 ## Configuration
 
