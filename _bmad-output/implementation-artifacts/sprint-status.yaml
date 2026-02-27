@@ -59,8 +59,8 @@ development_status:
   2-4-enhanced-snapshot-branch-management: done
   epic-2-retrospective: done
 
-  epic-3: backlog
-  3-1-runtime-status-snapshot-collection: backlog
+  epic-3: in-progress
+  3-1-runtime-status-snapshot-collection: ready-for-dev
   3-2-health-checks-implementation: backlog
   3-3-system-status-via-telegram: backlog
   3-4-health-checks-via-telegram: backlog
