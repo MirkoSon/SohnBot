@@ -326,6 +326,7 @@ None — implementation went cleanly. One notable observation: `patch` library v
 - `tests/integration/test_snapshot_recovery.py` — fixed `apply_patch` test to include `patch` param + mock
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — status updated to `done`
 - `_bmad-output/implementation-artifacts/1-6-patch-based-file-edit-with-snapshot-creation.md` — this file
+- `README.md` — added git/ripgrep runtime dependency table and per-platform install instructions
 
 ## Senior Developer Review (AI)
 
@@ -346,9 +347,9 @@ None — implementation went cleanly. One notable observation: `patch` library v
 
 **LOW — Fixed:**
 - **L2** Dead test code (`VALID_PATCH_MULTILINE`, `temp_py_file` fixture) removed from `test_patch_editor.py`.
+- **L3** Git CLI not documented in README — added Runtime CLI Dependencies table + per-platform git install instructions to `README.md`.
 
 **LOW — Deferred:**
 - **L1** CRLF in `_normalize_patch_paths` suffix (always `\n`): documented behavior, low Windows risk.
-- **L3** Git CLI not documented in README: out of scope for code review fix pass.
 
 ### Final Test Count: 224 passed, 5 skipped (was 218+5 after implementation)
