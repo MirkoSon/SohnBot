@@ -15,7 +15,8 @@
       "Bash(find tests:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(poetry run:*)"
     ]
   }
 }

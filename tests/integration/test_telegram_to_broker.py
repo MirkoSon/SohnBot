@@ -21,13 +21,15 @@ class TestTelegramToBrokerFlow:
         session = AsyncMock()
 
         # Mock async generator response
-        async def mock_query(prompt, chat_id):
+        async def mock_query(prompt, chat_id, send_message=None, skip_ambiguity_check=False):
             # Simulate Claude SDK response
             mock_msg = MagicMock()
             mock_msg.content = [MagicMock(text="This is a test response from Claude")]
             yield mock_msg
 
         session.query = mock_query
+        session.postponement_manager = MagicMock()
+        session.postponement_manager.has_pending = AsyncMock(return_value=False)
         return session
 
     @pytest.fixture
@@ -116,7 +118,7 @@ class TestTelegramToBrokerFlow:
         # Mock session with multiple messages
         mock_session = AsyncMock()
 
-        async def multi_response(prompt, chat_id):
+        async def multi_response(prompt, chat_id, send_message=None, skip_ambiguity_check=False):
             msg1 = MagicMock()
             msg1.content = [MagicMock(text="Part 1")]
             yield msg1
@@ -126,6 +128,8 @@ class TestTelegramToBrokerFlow:
             yield msg2
 
         mock_session.query = multi_response
+        mock_session.postponement_manager = MagicMock()
+        mock_session.postponement_manager.has_pending = AsyncMock(return_value=False)
         router = MessageRouter(agent_session=mock_session)
 
         response = await router.route_to_runtime("123", "Test")
@@ -143,3 +147,49 @@ class TestTelegramToBrokerFlow:
         # Should log message received and response sent
         info_calls = [call for call in mock_logger.info.call_args_list]
         assert len(info_calls) >= 2  # received + sent
+
+    @pytest.mark.asyncio
+    async def test_pending_clarification_acknowledged_without_auto_execution(self):
+        """Pending non-postponed clarifications should not send duplicate response."""
+        mock_session = AsyncMock()
+        mock_session.postponement_manager = MagicMock()
+        mock_session.postponement_manager.has_pending = AsyncMock(return_value=True)
+        pending = MagicMock()
+        pending.postponed = False
+        pending.response_text = "list files"
+        mock_session.postponement_manager.resolve = AsyncMock(return_value=pending)
+        mock_session.query = AsyncMock()
+
+        router = MessageRouter(agent_session=mock_session)
+        response = await router.route_to_runtime("123", "list files")
+
+        assert response == ""
+        mock_session.query.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_postponed_clarification_resumes_original_request(self):
+        """Postponed operations resume when clarification arrives later."""
+        mock_session = AsyncMock()
+        mock_session.postponement_manager = MagicMock()
+        mock_session.postponement_manager.has_pending = AsyncMock(return_value=True)
+
+        pending = MagicMock()
+        pending.postponed = True
+        pending.response_text = "list files"
+        pending.original_prompt = "do it"
+        mock_session.postponement_manager.resolve = AsyncMock(return_value=pending)
+        mock_session.postponement_manager.consume_resolved = AsyncMock(return_value=pending)
+        mock_session.postponement_manager.build_clarified_prompt = MagicMock(
+            return_value="do it\n\nClarification provided by user: list files"
+        )
+
+        async def resumed_query(prompt, chat_id, send_message=None, skip_ambiguity_check=False):
+            msg = MagicMock()
+            msg.content = [MagicMock(text="Resumed response")]
+            yield msg
+
+        mock_session.query = resumed_query
+        router = MessageRouter(agent_session=mock_session)
+
+        response = await router.route_to_runtime("123", "list files")
+        assert "resumed response" in response.lower()

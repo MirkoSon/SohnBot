@@ -48,13 +48,15 @@ class TestAgentSession:
         mock_client = AsyncMock()
         mock_sdk.return_value = mock_client
 
-        await agent_session.initialize()
+        with patch.object(agent_session.postponement_manager, "recover_pending", AsyncMock()) as mock_recover:
+            await agent_session.initialize()
 
         # Should create SDK client
         mock_sdk.assert_called_once()
 
         # Should enter context
         mock_client.__aenter__.assert_called_once()
+        mock_recover.assert_called_once()
 
         assert agent_session.client is not None
 
@@ -154,6 +156,79 @@ class TestAgentSession:
         assert len(responses) == 2
 
     @pytest.mark.asyncio
+    async def test_query_ambiguous_prompt_sends_clarification(self, agent_session):
+        """Ambiguous prompt triggers clarification request path."""
+        agent_session.client = AsyncMock()
+        agent_session.client.query = AsyncMock()
+        agent_session.client.receive_response = AsyncMock()
+
+        send_message = AsyncMock(return_value=True)
+
+        with (
+            patch("src.sohnbot.runtime.agent_session.log_operation_start", AsyncMock()),
+            patch.object(agent_session.postponement_manager, "add_pending", AsyncMock()),
+            patch.object(agent_session.postponement_manager, "wait_for_clarification", AsyncMock(return_value=None)),
+            patch.object(agent_session.postponement_manager, "get_pending", AsyncMock(return_value=None)),
+        ):
+            responses = []
+            async for msg in agent_session.query("do it", "123456789", send_message=send_message):
+                responses.append(msg)
+
+        send_message.assert_called_once()
+        assert responses
+        assert "postponed" in responses[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_query_ambiguous_prompt_postpones_on_timeout(self, agent_session):
+        """Timed-out clarification marks operation postponed."""
+        agent_session.client = AsyncMock()
+        agent_session.client.query = AsyncMock()
+        agent_session.client.receive_response = AsyncMock()
+        send_message = AsyncMock(return_value=True)
+
+        pending = MagicMock()
+        with (
+            patch("src.sohnbot.runtime.agent_session.log_operation_start", AsyncMock()),
+            patch.object(agent_session.postponement_manager, "add_pending", AsyncMock()),
+            patch.object(agent_session.postponement_manager, "wait_for_clarification", AsyncMock(return_value=None)),
+            patch.object(agent_session.postponement_manager, "get_pending", AsyncMock(return_value=pending)),
+            patch.object(agent_session.postponement_manager, "postpone_and_schedule", AsyncMock()) as mock_postpone,
+        ):
+            async for _ in agent_session.query("fix it", "123456789", send_message=send_message):
+                pass
+
+        mock_postpone.assert_called_once_with(pending)
+
+    @pytest.mark.asyncio
+    async def test_query_ambiguous_prompt_resolves_and_runs(self, agent_session):
+        """Resolved clarification continues with clarified prompt."""
+        agent_session.client = AsyncMock()
+        agent_session.client.query = AsyncMock()
+
+        async def mock_responses():
+            yield MagicMock(content=[MagicMock(text="ok")])
+
+        agent_session.client.receive_response = mock_responses
+        send_message = AsyncMock(return_value=True)
+
+        resolved = MagicMock()
+        resolved.original_prompt = "do it"
+        resolved.response_text = "list files"
+        with (
+            patch("src.sohnbot.runtime.agent_session.log_operation_start", AsyncMock()),
+            patch("src.sohnbot.runtime.agent_session.log_operation_end", AsyncMock()),
+            patch.object(agent_session.postponement_manager, "add_pending", AsyncMock()),
+            patch.object(agent_session.postponement_manager, "wait_for_clarification", AsyncMock(return_value=resolved)),
+            patch.object(agent_session.postponement_manager, "consume_resolved", AsyncMock(return_value=resolved)),
+        ):
+            async for _ in agent_session.query("do it", "123456789", send_message=send_message):
+                pass
+
+        assert agent_session.client.query.call_count == 1
+        queried_prompt = agent_session.client.query.call_args[0][0]
+        assert "Clarification provided by user" in queried_prompt
+
+    @pytest.mark.asyncio
     async def test_query_error_handling(self, agent_session):
         """SDK errors caught and logged."""
         # Client not initialized
@@ -162,6 +237,32 @@ class TestAgentSession:
         with pytest.raises(RuntimeError, match="not initialized"):
             async for _ in agent_session.query("Test", "123"):
                 pass
+
+    @pytest.mark.asyncio
+    async def test_query_uses_custom_ambiguity_evaluator(self, mock_config, mock_broker):
+        """Custom ambiguity evaluator overrides default heuristic."""
+        session = AgentSession(
+            config_manager=mock_config,
+            broker_router=mock_broker,
+            ambiguity_evaluator=lambda _: True,
+        )
+        session.client = AsyncMock()
+        session.client.query = AsyncMock()
+        session.client.receive_response = AsyncMock()
+
+        send_message = AsyncMock(return_value=True)
+        with (
+            patch("src.sohnbot.runtime.agent_session.log_operation_start", AsyncMock()),
+            patch.object(session.postponement_manager, "add_pending", AsyncMock()),
+            patch.object(session.postponement_manager, "wait_for_clarification", AsyncMock(return_value=None)),
+            patch.object(session.postponement_manager, "get_pending", AsyncMock(return_value=None)),
+        ):
+            responses = []
+            async for msg in session.query("this-is-normally-clear", "123456789", send_message=send_message):
+                responses.append(msg)
+
+        send_message.assert_called_once()
+        assert responses
 
     # Cleanup Tests
 

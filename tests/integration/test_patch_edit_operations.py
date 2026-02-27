@@ -8,6 +8,7 @@ import pytest
 from src.sohnbot.broker import BrokerRouter, ScopeValidator
 from src.sohnbot.capabilities.git.snapshot_manager import GitCapabilityError
 from src.sohnbot.persistence.db import DatabaseManager, set_db_manager
+from src.sohnbot.persistence.notification import get_pending_notifications
 from scripts.migrate import apply_migrations
 
 
@@ -239,25 +240,20 @@ async def test_apply_patch_missing_path_param(git_repo, setup_database):
 
 
 # ---------------------------------------------------------------------------
-# AC: Best-effort notifier called on success
+# AC: Outbox notification is queued on success
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_notifier_called_on_successful_patch(git_repo, setup_database):
-    """Best-effort notifier is called after successful apply_patch."""
+    """Successful apply_patch queues a notification in outbox."""
     target = git_repo / "file.txt"
     target.write_text("line1\nline2\nline3\n")
 
     patch_content = SIMPLE_PATCH.replace("original.txt", target.name)
 
-    notification_calls = []
-
-    async def fake_notifier(chat_id: str, message: str) -> None:
-        notification_calls.append((chat_id, message))
-
     validator = ScopeValidator([str(git_repo)])
-    router = BrokerRouter(validator, notifier=fake_notifier)
+    router = BrokerRouter(validator)
 
     with patch.object(router.snapshot_manager, "find_repo_root", return_value=str(git_repo)), \
          patch.object(router.snapshot_manager, "create_snapshot", new=AsyncMock(return_value="snapshot/edit-test")):
@@ -269,33 +265,28 @@ async def test_notifier_called_on_successful_patch(git_repo, setup_database):
         )
 
     assert result.allowed is True
-    assert len(notification_calls) == 1
-    chat_id, message = notification_calls[0]
-    assert chat_id == "chat_42"
-    assert "✅" in message
-    assert "Patch applied" in message
-    assert "snapshot/edit-test" in message
-    assert "Lines:" in message
-    assert "+1" in message
-    assert "-1" in message
+    pending = await get_pending_notifications()
+    assert len(pending) == 1
+    assert pending[0]["chat_id"] == "chat_42"
+    assert "✅" in pending[0]["message_text"]
+    assert "fs.apply_patch" in pending[0]["message_text"]
+    assert "snapshot/edit-test" in pending[0]["message_text"]
 
 
 @pytest.mark.asyncio
 async def test_notifier_failure_does_not_block_result(git_repo, setup_database):
-    """Notifier failure must NOT affect the BrokerResult."""
+    """Outbox enqueue failure must NOT affect the BrokerResult."""
     target = git_repo / "file.txt"
     target.write_text("line1\nline2\nline3\n")
 
     patch_content = SIMPLE_PATCH.replace("original.txt", target.name)
 
-    async def crashing_notifier(chat_id: str, message: str) -> None:
-        raise RuntimeError("notification service down")
-
     validator = ScopeValidator([str(git_repo)])
-    router = BrokerRouter(validator, notifier=crashing_notifier)
+    router = BrokerRouter(validator)
 
     with patch.object(router.snapshot_manager, "find_repo_root", return_value=str(git_repo)), \
-         patch.object(router.snapshot_manager, "create_snapshot", new=AsyncMock(return_value="snapshot/edit-test")):
+         patch.object(router.snapshot_manager, "create_snapshot", new=AsyncMock(return_value="snapshot/edit-test")), \
+         patch("src.sohnbot.broker.router.enqueue_notification", side_effect=RuntimeError("outbox down")):
         result = await router.route_operation(
             capability="fs",
             action="apply_patch",
@@ -303,7 +294,7 @@ async def test_notifier_failure_does_not_block_result(git_repo, setup_database):
             chat_id="chat_42",
         )
 
-    # Despite notifier crash, operation succeeded
+    # Despite enqueue crash, operation succeeded
     assert result.allowed is True
     assert result.snapshot_ref == "snapshot/edit-test"
 

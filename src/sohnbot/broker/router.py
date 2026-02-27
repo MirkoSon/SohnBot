@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Coroutine, Dict, Optional
+from typing import Any, Dict, Optional
 import structlog
 
 from ..capabilities.files import FileCapabilityError, FileOps, PatchEditor
@@ -12,6 +12,10 @@ from ..capabilities.git import GitCapabilityError, SnapshotManager
 from .operation_classifier import classify_tier
 from .scope_validator import ScopeValidator
 from ..persistence.audit import log_operation_start, log_operation_end
+from ..persistence.notification import (
+    enqueue_notification,
+    get_notifications_enabled,
+)
 from ..config.manager import ConfigManager
 
 logger = structlog.get_logger(__name__)
@@ -36,7 +40,6 @@ class BrokerRouter:
         self,
         scope_validator: ScopeValidator,
         config_manager: Optional[ConfigManager] = None,
-        notifier: Optional[Callable[[str, str], Coroutine[Any, Any, None]]] = None,
     ):
         """
         Initialize broker router.
@@ -44,11 +47,9 @@ class BrokerRouter:
         Args:
             scope_validator: ScopeValidator instance for path validation
             config_manager: ConfigManager instance for dynamic configuration (optional for tests)
-            notifier: Optional async callable(chat_id, message) for best-effort notifications
         """
         self.scope_validator = scope_validator
         self.config_manager = config_manager
-        self.notifier = notifier
         self.file_ops = FileOps()
         self.patch_editor = PatchEditor()
         self.snapshot_manager = SnapshotManager()
@@ -181,6 +182,72 @@ class BrokerRouter:
                         },
                     )
 
+        # Git capability parameter validation and scope checking
+        if capability == "git":
+            # Validate required parameters
+            if action == "list_snapshots" and "repo_path" not in params:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameter: repo_path",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+
+            if action == "rollback":
+                if "repo_path" not in params or "snapshot_ref" not in params:
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "Missing required parameters: repo_path and snapshot_ref",
+                            "details": {"action": action},
+                            "retryable": False,
+                        },
+                    )
+
+            # Scope validation: repo_path must be within configured roots
+            repo_path = params.get("repo_path")
+            if repo_path:
+                is_valid, error_msg = self.scope_validator.validate_path(repo_path)
+                if not is_valid:
+                    normalized_path = self.scope_validator.get_normalized_path(repo_path)
+                    allowed_roots = self.scope_validator.get_allowed_roots()
+                    logger.warning(
+                        "scope_violation_blocked",
+                        operation_id=operation_id,
+                        chat_id=chat_id,
+                        capability=capability,
+                        action=action,
+                        attempted_path=str(repo_path),
+                        normalized_path=normalized_path,
+                        allowed_roots=allowed_roots,
+                    )
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "scope_violation",
+                            "message": error_msg,
+                            "details": {
+                                "path": str(repo_path),
+                                "normalized_path": normalized_path,
+                                "allowed_roots": allowed_roots,
+                            },
+                            "retryable": False,
+                        },
+                    )
+
         # 4. Check limits (e.g., max command profiles per request)
         # TODO: Implement limit checking (Story 1.5+)
 
@@ -197,7 +264,8 @@ class BrokerRouter:
         # 6. Execute capability (with snapshot if Tier 1/2)
         snapshot_ref = None
         try:
-            if tier in (1, 2):
+            # Skip snapshot creation for git operations (they ARE the snapshot operations)
+            if tier in (1, 2) and not (capability == "git" and action in {"rollback", "list_snapshots"}):
                 # Create git snapshot branch before execution
                 snapshot_ref = await self._create_snapshot(
                     operation_id, file_path=params.get("path")
@@ -212,7 +280,7 @@ class BrokerRouter:
 
             async with asyncio.timeout(timeout_seconds):
                 result = await self._execute_capability(
-                    capability, action, params
+                    capability, action, params, operation_id
                 )
 
             # 7. Log operation end (success)
@@ -224,16 +292,15 @@ class BrokerRouter:
                 duration_ms=duration_ms,
             )
 
-            # 8. Best-effort notification (Tier 1/2 operations)
-            if tier in (1, 2) and self.notifier:
-                await self._send_notification(
-                    chat_id=chat_id,
-                    capability=capability,
-                    action=action,
-                    params=params,
-                    result=result,
-                    snapshot_ref=snapshot_ref,
-                )
+            await self._enqueue_operation_notification(
+                operation_id=operation_id,
+                chat_id=chat_id,
+                capability=capability,
+                action=action,
+                params=params,
+                status="completed",
+                snapshot_ref=snapshot_ref,
+            )
 
             return BrokerResult(
                 allowed=True,
@@ -251,6 +318,15 @@ class BrokerRouter:
                 status="failed",
                 duration_ms=duration_ms,
                 error_details={"code": "timeout", "message": "Operation timed out"},
+            )
+            await self._enqueue_operation_notification(
+                operation_id=operation_id,
+                chat_id=chat_id,
+                capability=capability,
+                action=action,
+                params=params,
+                status="timeout",
+                snapshot_ref=snapshot_ref,
             )
             return BrokerResult(
                 allowed=False,
@@ -272,6 +348,15 @@ class BrokerRouter:
                 duration_ms=duration_ms,
                 error_details=e.to_dict(),
             )
+            await self._enqueue_operation_notification(
+                operation_id=operation_id,
+                chat_id=chat_id,
+                capability=capability,
+                action=action,
+                params=params,
+                status="failed",
+                snapshot_ref=snapshot_ref,
+            )
             return BrokerResult(
                 allowed=False,
                 operation_id=operation_id,
@@ -287,6 +372,15 @@ class BrokerRouter:
                 status="failed",
                 duration_ms=duration_ms,
                 error_details={"code": "execution_error", "message": str(e)},
+            )
+            await self._enqueue_operation_notification(
+                operation_id=operation_id,
+                chat_id=chat_id,
+                capability=capability,
+                action=action,
+                params=params,
+                status="failed",
+                snapshot_ref=snapshot_ref,
             )
             return BrokerResult(
                 allowed=False,
@@ -367,7 +461,7 @@ class BrokerRouter:
         )
 
     async def _execute_capability_placeholder(
-        self, capability: str, action: str, params: Dict[str, Any]
+        self, capability: str, action: str, params: Dict[str, Any], operation_id: str
     ) -> Dict[str, Any]:
         """
         Placeholder for capability execution.
@@ -399,7 +493,7 @@ class BrokerRouter:
         }
 
     async def _execute_capability(
-        self, capability: str, action: str, params: Dict[str, Any]
+        self, capability: str, action: str, params: Dict[str, Any], operation_id: str
     ) -> Dict[str, Any]:
         """Execute capability action with concrete implementations when available."""
         if capability == "fs":
@@ -428,49 +522,72 @@ class BrokerRouter:
                     patch_max_size_kb=patch_max_kb,
                 )
 
-        return await self._execute_capability_placeholder(capability, action, params)
+        if capability == "git":
+            timeout = (
+                self.config_manager.get("git.operation_timeout_seconds")
+                if self.config_manager
+                else 30
+            )
+            if action == "list_snapshots":
+                return {"snapshots": self.snapshot_manager.list_snapshots(params["repo_path"])}
+            if action == "rollback":
+                return await self.snapshot_manager.rollback_to_snapshot(
+                    repo_path=params["repo_path"],
+                    snapshot_ref=params["snapshot_ref"],
+                    operation_id=operation_id,
+                    timeout_seconds=timeout,
+                )
 
-    async def _send_notification(
+        return await self._execute_capability_placeholder(capability, action, params, operation_id)
+
+    def _format_notification_message(
         self,
+        capability: str,
+        action: str,
+        params: Dict[str, Any],
+        status: str,
+        snapshot_ref: Optional[str],
+    ) -> str:
+        emoji = "✅" if status == "completed" else ("⏱️" if status == "timeout" else "❌")
+        affected = params.get("paths") or params.get("path") or params.get("repo_path") or "-"
+        message = f"{emoji} {capability}.{action} | files={affected} | result={status}"
+        if snapshot_ref:
+            message += f" | snapshot={snapshot_ref}"
+        return message
+
+    async def _enqueue_operation_notification(
+        self,
+        operation_id: str,
         chat_id: str,
         capability: str,
         action: str,
         params: Dict[str, Any],
-        result: Optional[Dict[str, Any]],
+        status: str,
         snapshot_ref: Optional[str],
     ) -> None:
-        """
-        Send best-effort Telegram notification after a Tier 1/2 operation.
-
-        Failures are logged but NEVER propagate to caller.
-        """
+        """Queue notification in persistent outbox without blocking operation result."""
         try:
-            if capability == "fs" and action == "apply_patch" and result:
-                file_path = result.get("path", params.get("path", "?"))
-                added = result.get("lines_added", 0)
-                removed = result.get("lines_removed", 0)
-                snap = snapshot_ref or "none"
-                message = (
-                    f"✅ Patch applied to {file_path}. "
-                    f"Snapshot: {snap}. Lines: +{added}/-{removed}"
-                )
-            else:
-                message = (
-                    f"✅ Operation {capability}.{action} completed."
-                    + (f" Snapshot: {snapshot_ref}" if snapshot_ref else "")
-                )
-
-            await self.notifier(chat_id, message)
-            logger.info(
-                "notification_sent",
-                chat_id=chat_id,
+            enabled = await get_notifications_enabled(chat_id)
+            if not enabled:
+                return
+            message = self._format_notification_message(
+                capability=capability,
                 action=action,
+                params=params,
+                status=status,
                 snapshot_ref=snapshot_ref,
+            )
+            await enqueue_notification(
+                operation_id=operation_id,
+                chat_id=chat_id,
+                message_text=message,
             )
         except Exception as exc:
             logger.warning(
-                "notification_failed",
+                "notification_enqueue_failed",
+                operation_id=operation_id,
                 chat_id=chat_id,
+                capability=capability,
                 action=action,
                 error=str(exc),
             )

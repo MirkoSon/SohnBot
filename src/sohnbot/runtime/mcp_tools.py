@@ -264,41 +264,71 @@ def create_sohnbot_mcp_server(broker, config):
             }]
         }
 
-    @tool("git__rollback", "Rollback to snapshot", {"snapshot_ref": str})
+    @tool("git__list_snapshots", "List available snapshot branches", {"repo_path": str})
+    async def git_list_snapshots(args):
+        """List snapshots via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+
+        repo_path = args.get("repo_path")
+        logger.info("mcp_tool_invoked", tool="git__list_snapshots", repo_path=repo_path, chat_id=chat_id)
+
+        result = await broker.route_operation(
+            capability="git",
+            action="list_snapshots",
+            params={"repo_path": repo_path},
+            chat_id=chat_id
+        )
+
+        if not result.allowed:
+            error_msg = result.error.get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="git__list_snapshots", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+
+        snapshots = result.result.get("snapshots", [])
+        if not snapshots:
+            return _as_mcp_text("No snapshots found.")
+
+        lines = ["Available snapshots:"]
+        for i, snap in enumerate(snapshots, 1):
+            lines.append(f"{i}. {snap['ref']} ({snap['timestamp']})")
+
+        return _as_mcp_text("\n".join(lines))
+
+    @tool("git__rollback", "Rollback to snapshot", {"snapshot_ref": str, "repo_path": str})
     async def git_rollback(args):
-        """Rollback via broker (Epic 2 will implement actual capability)."""
+        """Rollback to snapshot via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
 
         snapshot_ref = args.get("snapshot_ref")
-        logger.info("mcp_tool_invoked", tool="git__rollback", snapshot_ref=snapshot_ref, chat_id=chat_id)
+        repo_path = args.get("repo_path")
+        logger.info(
+            "mcp_tool_invoked",
+            tool="git__rollback",
+            snapshot_ref=snapshot_ref,
+            repo_path=repo_path,
+            chat_id=chat_id
+        )
 
         result = await broker.route_operation(
             capability="git",
             action="rollback",
-            params={"snapshot_ref": snapshot_ref},
+            params={"snapshot_ref": snapshot_ref, "repo_path": repo_path},
             chat_id=chat_id
         )
 
         if not result.allowed:
             error_msg = result.error.get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__rollback", error=error_msg)
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Operation denied: {error_msg}"
-                }]
-            }
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
-        return {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "Git rollback capability not yet implemented (Epic 2). "
-                    "This is a stub for testing gateway/runtime integration."
-                )
-            }]
-        }
+        data = result.result
+        commit_hash = data.get("commit_hash", "?")
+        files_restored = data.get("files_restored", 0)
+        return _as_mcp_text(
+            f"✅ Restored to snapshot: {snapshot_ref}. Commit: {commit_hash}. Files: {files_restored}"
+        )
 
     # Create and return server
     return create_sdk_mcp_server(
@@ -315,6 +345,7 @@ def create_sohnbot_mcp_server(broker, config):
             git_status,
             git_diff,
             git_commit,
+            git_list_snapshots,
             git_rollback,
         ]
     )

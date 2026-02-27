@@ -92,7 +92,7 @@ async def log_operation_end(
 
     Args:
         operation_id: UUID tracking ID for operation
-        status: Final status ('completed' or 'failed')
+        status: Final status ('completed', 'failed', 'postponed', or 'cancelled')
         snapshot_ref: Git snapshot branch reference (if Tier 1/2)
         duration_ms: Operation duration in milliseconds
         error_details: Error details if status='failed'
@@ -129,6 +129,10 @@ async def log_operation_end(
             duration_ms=duration_ms,
             snapshot_ref=snapshot_ref,
         )
+    elif status == "postponed":
+        logger.warning("operation_postponed", operation_id=operation_id)
+    elif status == "cancelled":
+        logger.warning("operation_cancelled", operation_id=operation_id)
     else:
         logger.error(
             "operation_failed",

@@ -50,7 +50,8 @@ class TestTelegramClient:
         # Should route to runtime
         message_router.route_to_runtime.assert_called_once_with(
             chat_id="123456789",
-            message="Test message"
+            message="Test message",
+            send_message=telegram_client.send_message,
         )
 
         # Should send response
@@ -106,7 +107,8 @@ class TestTelegramClient:
 
         message_router.route_to_runtime.assert_called_once_with(
             chat_id="123456789",
-            message="Test message"
+            message="Test message",
+            send_message=telegram_client.send_message,
         )
 
     @pytest.mark.asyncio
@@ -134,6 +136,15 @@ class TestTelegramClient:
         assert "error" in args[0].lower()
 
     @pytest.mark.asyncio
+    async def test_handle_message_suppresses_empty_response(self, telegram_client, mock_update, message_router):
+        """Empty runtime response should not produce a Telegram reply."""
+        message_router.route_to_runtime.return_value = ""
+
+        await telegram_client.handle_message(mock_update, None)
+
+        mock_update.message.reply_text.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_send_message_success(self, telegram_client):
         """Notification successfully sent."""
         telegram_client.application = AsyncMock()
@@ -157,6 +168,57 @@ class TestTelegramClient:
 
             assert result is False
             mock_logger.error.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_start_starts_notification_worker(self, message_router):
+        """Client startup initializes polling and starts notification worker."""
+        worker = AsyncMock()
+        worker.start = AsyncMock()
+        worker.stop = AsyncMock()
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+            notification_worker=worker,
+        )
+
+        app = MagicMock()
+        app.initialize = AsyncMock()
+        app.start = AsyncMock()
+        app.updater = MagicMock()
+        app.updater.start_polling = AsyncMock()
+        app.add_handler = MagicMock()
+        builder = MagicMock()
+        builder.token.return_value = builder
+        builder.build.return_value = app
+
+        with patch("src.sohnbot.gateway.telegram_client.Application.builder", return_value=builder):
+            await client.start()
+
+        worker.start.assert_called_once()
+        app.initialize.assert_called_once()
+        app.start.assert_called_once()
+        app.updater.start_polling.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_stops_notification_worker(self, message_router):
+        """Client shutdown stops notification worker before app shutdown."""
+        worker = AsyncMock()
+        worker.start = AsyncMock()
+        worker.stop = AsyncMock()
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+            notification_worker=worker,
+        )
+        client.application = AsyncMock()
+
+        await client.stop()
+
+        worker.stop.assert_called_once()
+        client.application.stop.assert_called_once()
+        client.application.shutdown.assert_called_once()
 
 
 class TestFormatters:

@@ -239,6 +239,12 @@ async def test_execution_log_check_constraints(tmp_path):
             ("test", 123, "fs", "read", "chat1", 0, "invalid")  # Invalid status
         )
 
+    # Test extended valid status
+    await conn.execute(
+        "INSERT INTO execution_log (operation_id, timestamp, capability, action, chat_id, tier, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("test-postponed", 123, "runtime", "clarification", "chat1", 0, "postponed")
+    )
+
     await conn.close()
 
 

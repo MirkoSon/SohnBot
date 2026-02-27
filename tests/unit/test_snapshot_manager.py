@@ -208,3 +208,238 @@ class TestGitCapabilityErrorShape:
         """details=None should serialize as empty dict."""
         err = GitCapabilityError(code="x", message="y")
         assert err.to_dict()["details"] == {}
+
+
+# ---------------------------------------------------------------------------
+# list_snapshots
+# ---------------------------------------------------------------------------
+
+class TestListSnapshots:
+    def test_lists_snapshots_with_timestamps(self, manager, fake_repo):
+        """Returns sorted list of snapshot branches with parsed timestamps."""
+        # Mock git branch --list output
+        git_output = b"  snapshot/edit-2026-02-27-1430\n  snapshot/edit-2026-02-26-0900\n"
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=git_output,
+                stderr=b"",
+            )
+
+            result = manager.list_snapshots(str(fake_repo))
+
+        assert len(result) == 2
+        # Should be sorted newest first
+        assert result[0]["ref"] == "snapshot/edit-2026-02-27-1430"
+        assert "Feb 27, 2026 14:30 UTC" in result[0]["timestamp"]
+        assert result[1]["ref"] == "snapshot/edit-2026-02-26-0900"
+        assert "Feb 26, 2026 09:00 UTC" in result[1]["timestamp"]
+
+    def test_returns_empty_list_when_no_snapshots(self, manager, fake_repo):
+        """Returns empty list when no snapshot branches exist."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=b"",
+                stderr=b"",
+            )
+
+            result = manager.list_snapshots(str(fake_repo))
+
+        assert result == []
+
+    def test_raises_on_git_failure(self, manager, fake_repo):
+        """Raises list_snapshots_failed when git command fails."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=1,
+                stdout=b"",
+                stderr=b"fatal: not a git repository",
+            )
+
+            with pytest.raises(GitCapabilityError) as exc_info:
+                manager.list_snapshots(str(fake_repo))
+
+        assert exc_info.value.code == "list_snapshots_failed"
+
+
+# ---------------------------------------------------------------------------
+# rollback_to_snapshot
+# ---------------------------------------------------------------------------
+
+class TestRollbackToSnapshot:
+    @pytest.mark.asyncio
+    async def test_rollback_restores_files_and_commits(self, manager, fake_repo):
+        """Happy path: verifies snapshot, restores files, creates commit."""
+        snapshot_ref = "snapshot/edit-2026-02-27-1430"
+        operation_id = "abc12345"
+
+        # Mock git commands in sequence:
+        # 1. rev-parse --verify (verify snapshot exists) - success
+        # 2. checkout <ref> -- . (restore files) - success
+        # 3. commit (create rollback commit) - success
+        # 4. rev-parse --short HEAD (get commit hash) - returns hash
+        # 5. diff-tree (count files) - returns file list
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            process = AsyncMock()
+            process.returncode = 0
+
+            if call_count == 1:  # rev-parse --verify
+                process.communicate = AsyncMock(return_value=(b"abc123\n", b""))
+            elif call_count == 2:  # checkout
+                process.communicate = AsyncMock(return_value=(b"", b""))
+            elif call_count == 3:  # commit
+                process.communicate = AsyncMock(return_value=(b"", b""))
+            elif call_count == 4:  # rev-parse --short HEAD
+                process.communicate = AsyncMock(return_value=(b"def456\n", b""))
+            elif call_count == 5:  # diff-tree
+                process.communicate = AsyncMock(return_value=(b"file1.py\nfile2.py\n", b""))
+
+            return process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await manager.rollback_to_snapshot(
+                repo_path=str(fake_repo),
+                snapshot_ref=snapshot_ref,
+                operation_id=operation_id,
+                timeout_seconds=30,
+            )
+
+        assert result["snapshot_ref"] == snapshot_ref
+        assert result["commit_hash"] == "def456"
+        assert result["files_restored"] == 2
+        assert call_count == 5
+
+    @pytest.mark.asyncio
+    async def test_snapshot_not_found(self, manager, fake_repo):
+        """Raises snapshot_not_found when snapshot doesn't exist."""
+        process = AsyncMock()
+        process.returncode = 128
+        process.communicate = AsyncMock(return_value=(b"", b"fatal: Needed a single revision"))
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            with pytest.raises(GitCapabilityError) as exc_info:
+                await manager.rollback_to_snapshot(
+                    repo_path=str(fake_repo),
+                    snapshot_ref="snapshot/edit-2026-01-01-0000",
+                    operation_id="abc123",
+                )
+
+        assert exc_info.value.code == "snapshot_not_found"
+
+    @pytest.mark.asyncio
+    async def test_rollback_failed_on_checkout_error(self, manager, fake_repo):
+        """Raises rollback_failed when checkout command fails."""
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            process = AsyncMock()
+
+            if call_count == 1:  # rev-parse --verify succeeds
+                process.returncode = 0
+                process.communicate = AsyncMock(return_value=(b"abc123\n", b""))
+            else:  # checkout fails
+                process.returncode = 1
+                process.communicate = AsyncMock(return_value=(b"", b"error: pathspec '.' did not match"))
+
+            return process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            with pytest.raises(GitCapabilityError) as exc_info:
+                await manager.rollback_to_snapshot(
+                    repo_path=str(fake_repo),
+                    snapshot_ref="snapshot/edit-2026-02-27-1430",
+                    operation_id="abc123",
+                )
+
+        assert exc_info.value.code == "rollback_failed"
+
+    @pytest.mark.asyncio
+    async def test_commit_failed(self, manager, fake_repo):
+        """Raises commit_failed when commit command fails (not 'nothing to commit')."""
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            process = AsyncMock()
+
+            if call_count in (1, 2):  # rev-parse and checkout succeed
+                process.returncode = 0
+                process.communicate = AsyncMock(return_value=(b"abc123\n", b""))
+            else:  # commit fails with real error
+                process.returncode = 1
+                process.communicate = AsyncMock(return_value=(b"", b"fatal: unable to write new commit"))
+
+            return process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            with pytest.raises(GitCapabilityError) as exc_info:
+                await manager.rollback_to_snapshot(
+                    repo_path=str(fake_repo),
+                    snapshot_ref="snapshot/edit-2026-02-27-1430",
+                    operation_id="abc123",
+                )
+
+        assert exc_info.value.code == "commit_failed"
+
+    @pytest.mark.asyncio
+    async def test_timeout_during_rollback(self, manager, fake_repo):
+        """Raises snapshot_timeout when rollback exceeds timeout."""
+        process = AsyncMock()
+        process.kill = MagicMock()
+        process.wait = AsyncMock()
+        process.communicate = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            with pytest.raises(GitCapabilityError) as exc_info:
+                await manager.rollback_to_snapshot(
+                    repo_path=str(fake_repo),
+                    snapshot_ref="snapshot/edit-2026-02-27-1430",
+                    operation_id="abc123",
+                    timeout_seconds=1,
+                )
+
+        assert exc_info.value.code == "snapshot_timeout"
+        assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_no_changes_returns_current_head(self, manager, fake_repo):
+        """When checkout produces no changes, returns current HEAD without error."""
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            process = AsyncMock()
+
+            if call_count in (1, 2):  # rev-parse and checkout succeed
+                process.returncode = 0
+                process.communicate = AsyncMock(return_value=(b"abc123\n", b""))
+            elif call_count == 3:  # commit fails with "nothing to commit"
+                process.returncode = 1
+                process.communicate = AsyncMock(return_value=(b"", b"nothing to commit, working tree clean"))
+            elif call_count == 4:  # rev-parse --short HEAD
+                process.returncode = 0
+                process.communicate = AsyncMock(return_value=(b"abc123\n", b""))
+
+            return process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await manager.rollback_to_snapshot(
+                repo_path=str(fake_repo),
+                snapshot_ref="snapshot/edit-2026-02-27-1430",
+                operation_id="abc123",
+            )
+
+        assert result["snapshot_ref"] == "snapshot/edit-2026-02-27-1430"
+        assert result["commit_hash"] == "abc123"
+        assert result["files_restored"] == 0

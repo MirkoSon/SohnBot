@@ -8,7 +8,9 @@ import structlog
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
+from .commands import handle_notify_command
 from .formatters import format_for_telegram
+from .notification_worker import NotificationWorker
 
 logger = structlog.get_logger(__name__)
 
@@ -16,7 +18,13 @@ logger = structlog.get_logger(__name__)
 class TelegramClient:
     """Async Telegram Bot API integration with authentication."""
 
-    def __init__(self, token: str, allowed_chat_ids: list[int], message_router):
+    def __init__(
+        self,
+        token: str,
+        allowed_chat_ids: list[int],
+        message_router,
+        notification_worker: NotificationWorker | None = None,
+    ):
         """
         Initialize TelegramClient.
 
@@ -24,11 +32,13 @@ class TelegramClient:
             token: Telegram bot token from @BotFather
             allowed_chat_ids: List of authorized Telegram chat IDs (FR-033)
             message_router: MessageRouter instance for routing to runtime
+            notification_worker: Optional worker override (used by tests)
         """
         self.token = token
         self.allowed_chat_ids = allowed_chat_ids
         self.message_router = message_router
         self.application = None
+        self.notification_worker = notification_worker
 
     async def start(self):
         """Initialize and start the bot with polling."""
@@ -46,16 +56,23 @@ class TelegramClient:
         )
         self.application.add_handler(CommandHandler("start", self.cmd_start))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
+        self.application.add_handler(CommandHandler("notify", self.cmd_notify))
 
         # Start polling
         await self.application.initialize()
         await self.application.start()
         await self.application.updater.start_polling()
 
+        if self.notification_worker is None:
+            self.notification_worker = NotificationWorker(self)
+        await self.notification_worker.start()
+
         logger.info("telegram_bot_started")
 
     async def stop(self):
         """Stop the bot gracefully."""
+        if self.notification_worker:
+            await self.notification_worker.stop()
         if self.application:
             logger.info("telegram_bot_stopping")
             await self.application.stop()
@@ -99,8 +116,13 @@ class TelegramClient:
             # Route to Claude Agent SDK runtime
             response = await self.message_router.route_to_runtime(
                 chat_id=str(chat_id),
-                message=message_text
+                message=message_text,
+                send_message=self.send_message,
             )
+
+            if not response.strip():
+                logger.info("telegram_response_suppressed", chat_id=chat_id)
+                return
 
             # Format and send response (handle 4096-char limit)
             formatted_messages = format_for_telegram(response)
@@ -164,6 +186,20 @@ class TelegramClient:
             "- Show git status\n\n"
             "All operations are logged and scoped to authorized directories."
         )
+
+    async def cmd_notify(self, update: Update, context):
+        """Handle /notify on|off|status command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_notify_command", chat_id=chat_id)
+            return
+
+        response = await handle_notify_command(str(chat_id), update.message.text or "")
+        await update.message.reply_text(response)
 
     async def send_message(self, chat_id: int, text: str) -> bool:
         """
