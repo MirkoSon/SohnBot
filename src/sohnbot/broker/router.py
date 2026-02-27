@@ -346,13 +346,12 @@ class BrokerRouter:
             Snapshot branch reference
         """
         if not file_path:
-            logger.warning(
-                "snapshot_skipped_no_file_path",
-                operation_id=operation_id,
+            raise GitCapabilityError(
+                code="snapshot_skipped",
+                message="No file path provided — cannot determine git repo for snapshot",
+                details={"operation_id": operation_id},
+                retryable=False,
             )
-            # Fallback: return a timestamp-based ref when no file path provided
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            return f"snapshot/edit-{timestamp}-{operation_id[:8]}"
 
         timeout = (
             self.config_manager.get("git.operation_timeout_seconds")
@@ -387,7 +386,7 @@ class BrokerRouter:
         Returns:
             Placeholder result dict
         """
-        logger.info(
+        logger.debug(
             "capability_execution_placeholder",
             capability=capability,
             action=action,

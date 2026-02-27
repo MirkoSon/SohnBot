@@ -218,11 +218,11 @@ class TestBrokerScopeEnforcement:
     @pytest.mark.asyncio
     async def test_broker_validates_only_fs_capability(self, broker, temp_allowed_root, setup_database):
         """Only fs capability triggers scope validation."""
-        # Verify git capability doesn't validate paths
+        # Verify git read-only operations bypass scope validation (Tier 0, no snapshot needed)
         result_git = await broker.route_operation(
             capability="git",
-            action="commit",
-            params={"message": "test"},
+            action="status",
+            params={},
             chat_id="test_user"
         )
         assert result_git.allowed is True  # No scope check for git

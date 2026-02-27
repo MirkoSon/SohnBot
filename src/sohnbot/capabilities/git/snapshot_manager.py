@@ -48,8 +48,9 @@ class SnapshotManager:
             GitCapabilityError: If no .git directory found
         """
         current = Path(file_path).resolve()
-        # If given a file path, start from its parent directory
-        if current.is_file():
+        # Start from parent if current is not a directory
+        # (handles existing files, non-existent paths, and symlinks to files)
+        if not current.is_dir():
             current = current.parent
 
         while True:

@@ -51,6 +51,13 @@ class TestFindRepoRoot:
         assert exc_info.value.code == "not_a_git_repo"
         assert exc_info.value.retryable is False
 
+    def test_finds_repo_root_for_non_existent_file(self, manager, fake_repo):
+        """M2 fix: non-existent file path correctly resolves repo root (not path/.git/)."""
+        # The file doesn't exist on disk but its parent is inside a git repo
+        non_existent = str(fake_repo / "new_file_not_yet_created.py")
+        root = manager.find_repo_root(non_existent)
+        assert root == str(fake_repo)
+
 
 # ---------------------------------------------------------------------------
 # create_snapshot — happy path

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.sohnbot.broker import BrokerRouter, ScopeValidator
+from src.sohnbot.capabilities.git.snapshot_manager import GitCapabilityError
 from src.sohnbot.persistence.db import DatabaseManager, set_db_manager
 from scripts.migrate import apply_migrations
 
@@ -271,8 +272,12 @@ async def test_notifier_called_on_successful_patch(git_repo, setup_database):
     assert len(notification_calls) == 1
     chat_id, message = notification_calls[0]
     assert chat_id == "chat_42"
+    assert "✅" in message
     assert "Patch applied" in message
     assert "snapshot/edit-test" in message
+    assert "Lines:" in message
+    assert "+1" in message
+    assert "-1" in message
 
 
 @pytest.mark.asyncio
@@ -301,3 +306,104 @@ async def test_notifier_failure_does_not_block_result(git_repo, setup_database):
     # Despite notifier crash, operation succeeded
     assert result.allowed is True
     assert result.snapshot_ref == "snapshot/edit-test"
+
+
+# ---------------------------------------------------------------------------
+# H2: GitCapabilityError from SnapshotManager propagates as BrokerResult.error
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_not_a_git_repo_propagates_to_broker_result(git_repo, setup_database):
+    """
+    GitCapabilityError(not_a_git_repo) raised by find_repo_root propagates
+    through broker to BrokerResult.allowed=False with correct error code.
+    """
+    target = git_repo / "file.txt"
+    target.write_text("line1\nline2\nline3\n")
+
+    patch_content = SIMPLE_PATCH.replace("original.txt", target.name)
+
+    validator = ScopeValidator([str(git_repo)])
+    router = BrokerRouter(validator)
+
+    # find_repo_root raises — simulates file outside any git repo
+    with patch.object(
+        router.snapshot_manager,
+        "find_repo_root",
+        side_effect=GitCapabilityError(
+            code="not_a_git_repo",
+            message="No git repository found for the given path",
+            details={"path": str(target)},
+            retryable=False,
+        ),
+    ):
+        result = await router.route_operation(
+            capability="fs",
+            action="apply_patch",
+            params={"path": str(target), "patch": patch_content},
+            chat_id="test_chat",
+        )
+
+    assert result.allowed is False
+    assert result.error is not None
+    assert result.error["code"] == "not_a_git_repo"
+    assert result.error["retryable"] is False
+    # File must NOT have been modified (snapshot failed before apply)
+    assert target.read_text() == "line1\nline2\nline3\n"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_creation_failed_propagates_to_broker_result(git_repo, setup_database):
+    """
+    GitCapabilityError(snapshot_creation_failed) from create_snapshot propagates
+    to BrokerResult.error and leaves the file unmodified.
+    """
+    target = git_repo / "file.txt"
+    target.write_text("line1\nline2\nline3\n")
+
+    patch_content = SIMPLE_PATCH.replace("original.txt", target.name)
+
+    validator = ScopeValidator([str(git_repo)])
+    router = BrokerRouter(validator)
+
+    with patch.object(
+        router.snapshot_manager, "find_repo_root", return_value=str(git_repo)
+    ), patch.object(
+        router.snapshot_manager,
+        "create_snapshot",
+        side_effect=GitCapabilityError(
+            code="snapshot_creation_failed",
+            message="Failed to create snapshot branch",
+            details={"repo_path": str(git_repo), "branch_name": "snapshot/edit-test", "stderr": "error"},
+            retryable=False,
+        ),
+    ):
+        result = await router.route_operation(
+            capability="fs",
+            action="apply_patch",
+            params={"path": str(target), "patch": patch_content},
+            chat_id="test_chat",
+        )
+
+    assert result.allowed is False
+    assert result.error["code"] == "snapshot_creation_failed"
+    # File unmodified — snapshot failed before apply
+    assert target.read_text() == "line1\nline2\nline3\n"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_skipped_error_on_missing_file_path(git_repo, setup_database):
+    """
+    _create_snapshot raises snapshot_skipped (not returns fake ref) when
+    no file_path is provided. BrokerResult.allowed=False, no phantom snapshot stored.
+    """
+    validator = ScopeValidator([str(git_repo)])
+    router = BrokerRouter(validator)
+
+    # Directly call _create_snapshot with no file_path to test H1 fix
+    with pytest.raises(GitCapabilityError) as exc_info:
+        await router._create_snapshot(operation_id="test-op-id", file_path=None)
+
+    assert exc_info.value.code == "snapshot_skipped"
+    assert exc_info.value.retryable is False

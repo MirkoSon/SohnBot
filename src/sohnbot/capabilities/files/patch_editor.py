@@ -60,7 +60,23 @@ class PatchEditor:
                 retryable=False,
             )
 
-        # 3. Target file must exist
+        # 3. Single-file patch validation: count distinct source file targets
+        #    A multi-file patch would silently corrupt the target file because
+        #    _normalize_patch_paths replaces ALL --- / +++ headers with the
+        #    same filename, causing the patch library to apply foreign hunks.
+        source_files = _count_patch_source_files(patch_content)
+        if source_files > 1:
+            raise FileCapabilityError(
+                code="invalid_patch_format",
+                message=(
+                    f"Patch targets {source_files} files but apply_patch accepts "
+                    "only single-file patches"
+                ),
+                details={"source_file_count": source_files},
+                retryable=False,
+            )
+
+        # 4. Target file must exist
         file_path = Path(path)
         if not file_path.exists():
             raise FileCapabilityError(
@@ -70,15 +86,15 @@ class PatchEditor:
                 retryable=False,
             )
 
-        # 4. Count lines added/removed from diff hunks
+        # 5. Count lines added/removed from diff hunks
         lines_added, lines_removed = _count_diff_lines(patch_content)
 
-        # 5. Normalize patch paths to the target file's name so the library
+        # 6. Normalize patch paths to the target file's name so the library
         #    can resolve the file relative to its parent directory
         normalized = _normalize_patch_paths(patch_content, str(file_path.name))
         root = str(file_path.parent)
 
-        # 6. Apply patch
+        # 7. Apply patch
         try:
             pset = patch_lib.fromstring(normalized.encode())
         except Exception as exc:
@@ -139,6 +155,23 @@ def _normalize_patch_paths(patch_content: str, filename: str) -> str:
         else:
             lines.append(line)
     return "".join(lines)
+
+
+def _count_patch_source_files(patch_content: str) -> int:
+    """
+    Count the number of distinct source files targeted by the patch.
+
+    Parses `--- <path>` lines (excluding `---` alone or `--- /dev/null`).
+    Returns the number of unique source paths found.
+    """
+    source_paths: set[str] = set()
+    for line in patch_content.splitlines():
+        if line.startswith("--- "):
+            path_part = line[4:].split("\t")[0].strip()
+            # Skip /dev/null (new-file patches) and bare "---" section separators
+            if path_part and path_part != "/dev/null":
+                source_paths.add(path_part)
+    return len(source_paths)
 
 
 def _count_diff_lines(patch_content: str) -> tuple[int, int]:

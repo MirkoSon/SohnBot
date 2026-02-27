@@ -20,19 +20,6 @@ VALID_PATCH = """\
  line3
 """
 
-VALID_PATCH_MULTILINE = """\
---- file.py
-+++ file.py
-@@ -1,5 +1,6 @@
- def foo():
--    return 1
-+    return 2
-+
-
- def bar():
-     return 3
-"""
-
 
 @pytest.fixture
 def editor():
@@ -51,18 +38,6 @@ def temp_file():
     if os.path.exists(path):
         os.unlink(path)
 
-
-@pytest.fixture
-def temp_py_file():
-    """Create a temp python-like file for multiline patch test."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, newline="\n"
-    ) as f:
-        f.write("def foo():\n    return 1\n\n\ndef bar():\n    return 3\n")
-        path = f.name
-    yield path
-    if os.path.exists(path):
-        os.unlink(path)
 
 
 class TestPatchEditorHappyPath:
@@ -113,6 +88,35 @@ class TestPatchTooLarge:
         # Small patch; set limit to 1MB — should pass
         result = editor.apply_patch(path=temp_file, patch_content=patch_for_file, patch_max_size_kb=1024)
         assert result["path"] == temp_file
+
+
+class TestMultiFilePatch:
+    def test_multi_file_patch_raises_invalid_format(self, editor, temp_file):
+        """Patch targeting two files raises invalid_patch_format (M1 fix)."""
+        multi_file_patch = (
+            "--- file1.txt\n+++ file1.txt\n"
+            "@@ -1,1 +1,1 @@\n-foo\n+bar\n"
+            "--- file2.txt\n+++ file2.txt\n"
+            "@@ -1,1 +1,1 @@\n-baz\n+qux\n"
+        )
+        with pytest.raises(FileCapabilityError) as exc_info:
+            editor.apply_patch(path=temp_file, patch_content=multi_file_patch)
+        assert exc_info.value.code == "invalid_patch_format"
+        assert "2" in exc_info.value.message  # mentions the count
+        assert exc_info.value.retryable is False
+
+    def test_new_file_patch_not_counted_as_multi(self, editor, temp_file):
+        """/dev/null in --- line (new file) does not trigger multi-file rejection."""
+        # A patch adding a new file has "--- /dev/null" which should not count
+        # as a distinct source file — single-file rule applies to source only
+        new_file_patch = (
+            "--- /dev/null\n+++ newfile.txt\n"
+            "@@ -0,0 +1,1 @@\n+hello\n"
+        )
+        # Should raise path_not_found (file doesn't exist), NOT invalid_patch_format
+        with pytest.raises(FileCapabilityError) as exc_info:
+            editor.apply_patch(path=temp_file, patch_content=new_file_patch)
+        assert exc_info.value.code != "invalid_patch_format"
 
 
 class TestInvalidPatchFormat:

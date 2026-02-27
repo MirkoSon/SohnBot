@@ -1,6 +1,6 @@
 # Story 1.6: Patch-Based File Edit with Snapshot Creation
 
-Status: review
+Status: done
 
 ## Story
 
@@ -324,5 +324,31 @@ None — implementation went cleanly. One notable observation: `patch` library v
 - `tests/unit/test_broker.py` — fixed `apply_patch` test to include `patch` param + mock snapshot_manager
 - `tests/integration/test_broker_integration.py` — fixed `apply_patch` test to include `patch` param + mock
 - `tests/integration/test_snapshot_recovery.py` — fixed `apply_patch` test to include `patch` param + mock
-- `_bmad-output/implementation-artifacts/sprint-status.yaml` — status updated to `review`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — status updated to `done`
 - `_bmad-output/implementation-artifacts/1-6-patch-based-file-edit-with-snapshot-creation.md` — this file
+
+## Senior Developer Review (AI)
+
+**Reviewer model:** claude-sonnet-4-6 | **Date:** 2026-02-27
+
+### Issues Found and Fixed (7 total)
+
+**HIGH — Fixed:**
+- **H1** `_create_snapshot` fallback returned fake phantom ref instead of raising — now raises `GitCapabilityError(code="snapshot_skipped")` per spec. Phantom refs in `execution_log` would have caused rollback (Story 1.7) to fail on non-existent branches.
+- **H2** No test for `GitCapabilityError` propagation through broker — added 3 integration tests covering `not_a_git_repo`, `snapshot_creation_failed`, and `snapshot_skipped` paths through broker to `BrokerResult.error`.
+
+**MEDIUM — Fixed:**
+- **M1** `_normalize_patch_paths` could silently corrupt target file with multi-file patches — added `_count_patch_source_files()` pre-flight validator rejecting patches with >1 distinct source file.
+- **M2** `find_repo_root` used `is_file()` check causing wrong path traversal for non-existent files — changed to `not current.is_dir()` to handle new/non-existent files correctly.
+- **M3** `_execute_capability_placeholder` logged at INFO causing production log noise — changed to DEBUG.
+- **M4** `patch_max_size_kb` was passed in MCP params but silently ignored by broker (broker reads from config_manager) — removed the redundant param from MCP to eliminate API confusion.
+- **M5** Notifier test only checked `"Patch applied" in message` — strengthened to verify `✅` emoji, `Lines:`, `+1`, `-1` per the AC format spec.
+
+**LOW — Fixed:**
+- **L2** Dead test code (`VALID_PATCH_MULTILINE`, `temp_py_file` fixture) removed from `test_patch_editor.py`.
+
+**LOW — Deferred:**
+- **L1** CRLF in `_normalize_patch_paths` suffix (always `\n`): documented behavior, low Windows risk.
+- **L3** Git CLI not documented in README: out of scope for code review fix pass.
+
+### Final Test Count: 224 passed, 5 skipped (was 218+5 after implementation)

@@ -151,10 +151,9 @@ def create_sohnbot_mcp_server(broker, config):
         patch_content = args.get("patch")
         logger.info("mcp_tool_invoked", tool="fs__apply_patch", path=path, chat_id=chat_id)
 
-        patch_max_kb = config.get("files.patch_max_size_kb")
         return await _run_file_tool(
             action="apply_patch",
-            params={"path": path, "patch": patch_content, "patch_max_size_kb": patch_max_kb},
+            params={"path": path, "patch": patch_content},
             chat_id=chat_id,
         )
 
