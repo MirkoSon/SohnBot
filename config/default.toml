@@ -79,6 +79,8 @@ http_enabled = true
 http_port = 8080
 http_host = "127.0.0.1"  # MUST be localhost (security invariant)
 refresh_seconds = 5
+collection_interval_seconds = 30  # Background snapshot collection interval (DYNAMIC)
+persist_snapshots = false          # Persist snapshots to SQLite (DYNAMIC, disabled by default)
 
 [models]
 # Model routing configuration (DYNAMIC - hot-reloadable)

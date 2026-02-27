@@ -241,6 +241,18 @@ REGISTRY: dict[str, ConfigKey] = {
         min_value=1,
         max_value=60,
     ),
+    "observability.collection_interval_seconds": ConfigKey(
+        tier="dynamic",
+        value_type=int,
+        default=30,
+        min_value=5,
+        max_value=300,
+    ),
+    "observability.persist_snapshots": ConfigKey(
+        tier="dynamic",
+        value_type=bool,
+        default=False,
+    ),
 
     # ===== MODEL ROUTING (Dynamic - Operational flexibility) =====
     "models.telegram_default": ConfigKey(
