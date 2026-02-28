@@ -33,6 +33,7 @@ from ..capabilities.observe import (
     update_snapshot_cache,
 )
 from ..persistence.db import get_db
+from .health_checks import run_all_health_checks
 
 logger = structlog.get_logger(__name__)
 
@@ -119,6 +120,11 @@ async def collect_snapshot() -> StatusSnapshot:
     notifier_state = await collect_notifier_state()
     resources = await collect_resource_usage()
     recent_ops = await query_recent_operations(limit=100)
+    health = await run_all_health_checks(
+        scheduler_state=scheduler_state,
+        notifier_state=notifier_state,
+        resources=resources,
+    )
 
     return StatusSnapshot(
         timestamp=timestamp,
@@ -127,7 +133,7 @@ async def collect_snapshot() -> StatusSnapshot:
         scheduler=scheduler_state,
         notifier=notifier_state,
         resources=resources,
-        health=[],  # Populated in Story 3.2
+        health=health,
         recent_operations=recent_ops,
     )
 

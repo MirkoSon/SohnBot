@@ -253,6 +253,39 @@ REGISTRY: dict[str, ConfigKey] = {
         value_type=bool,
         default=False,
     ),
+    "observability.scheduler_lag_threshold": ConfigKey(
+        tier="dynamic",
+        value_type=int,
+        default=300,
+        min_value=60,
+        max_value=3600,
+    ),
+    "observability.notifier_lag_threshold": ConfigKey(
+        tier="dynamic",
+        value_type=int,
+        default=120,
+        min_value=30,
+        max_value=600,
+    ),
+    "observability.outbox_stuck_threshold": ConfigKey(
+        tier="dynamic",
+        value_type=int,
+        default=3600,
+        min_value=300,
+        max_value=86400,
+    ),
+    "observability.disk_cap_enabled": ConfigKey(
+        tier="dynamic",
+        value_type=bool,
+        default=False,
+    ),
+    "observability.disk_cap_mb": ConfigKey(
+        tier="dynamic",
+        value_type=int,
+        default=1000,
+        min_value=100,
+        max_value=100000,
+    ),
 
     # ===== MODEL ROUTING (Dynamic - Operational flexibility) =====
     "models.telegram_default": ConfigKey(

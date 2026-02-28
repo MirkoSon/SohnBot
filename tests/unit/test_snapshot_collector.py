@@ -362,10 +362,10 @@ async def test_collect_snapshot_completes_fast(db_with_tables):
 
 
 @pytest.mark.asyncio
-async def test_collect_snapshot_health_empty(db_with_tables):
-    """Story 3.1: health list must be empty (Story 3.2 adds checks)."""
+async def test_collect_snapshot_health_populated(db_with_tables):
+    """Story 3.2: health checks must be populated in snapshots."""
     snap = await collect_snapshot()
-    assert snap.health == []
+    assert len(snap.health) > 0
 
 
 @pytest.mark.asyncio

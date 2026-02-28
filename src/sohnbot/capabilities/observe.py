@@ -84,7 +84,7 @@ class StatusSnapshot:
     scheduler: SchedulerState
     notifier: NotifierState
     resources: ResourceUsage
-    health: list[HealthCheckResult]  # Empty until Story 3.2
+    health: list[HealthCheckResult]  # Health check results from health_checks.py
     recent_operations: list[dict]  # Last 100 operations from execution_log
 
 

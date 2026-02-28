@@ -81,6 +81,12 @@ http_host = "127.0.0.1"  # MUST be localhost (security invariant)
 refresh_seconds = 5
 collection_interval_seconds = 30  # Background snapshot collection interval (DYNAMIC)
 persist_snapshots = false          # Persist snapshots to SQLite (DYNAMIC, disabled by default)
+# Health check thresholds (DYNAMIC - hot-reloadable)
+scheduler_lag_threshold = 300   # Seconds before scheduler is considered lagging (default: 5 min)
+notifier_lag_threshold = 120    # Seconds before notifier is considered stalled (default: 2 min)
+outbox_stuck_threshold = 3600   # Seconds before pending notification is considered stuck (default: 1 hr)
+disk_cap_enabled = false        # Enable disk usage cap check (DYNAMIC, disabled by default)
+disk_cap_mb = 1000              # Disk cap in MB for DB + logs combined (default: 1 GB)
 
 [models]
 # Model routing configuration (DYNAMIC - hot-reloadable)
