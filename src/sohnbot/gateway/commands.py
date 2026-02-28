@@ -2,10 +2,33 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+import shlex
+import time
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from croniter import croniter
+
+from ..capabilities.scheduler.timezone_handler import get_dst_transition_count
+from ..capabilities.scheduler import get_job_by_name
+from ..capabilities.observe import (
+    get_health_snapshot,
+    get_resource_snapshot_data,
+    get_status_snapshot_data,
+)
 from ..persistence.notification import (
     get_notifications_enabled,
     set_notifications_enabled,
 )
+
+_schedule_broker: Any = None
+
+
+def set_schedule_broker(broker: Any) -> None:
+    """Set broker used by /schedule command handlers."""
+    global _schedule_broker
+    _schedule_broker = broker
 
 
 async def handle_notify_command(chat_id: str, command_text: str) -> str:
@@ -25,3 +48,417 @@ async def handle_notify_command(chat_id: str, command_text: str) -> str:
         enabled = await get_notifications_enabled(chat_id)
         return "Notifications are ON." if enabled else "Notifications are OFF."
     return "Usage: /notify on|off|status"
+
+
+def _format_elapsed(reference_ts: int) -> str:
+    """Format human-readable elapsed time from a Unix timestamp."""
+    if reference_ts <= 0:
+        return "N/A"
+
+    delta = max(0, int(time.time()) - reference_ts)
+    if delta < 60:
+        return f"{delta}s ago"
+    if delta < 3600:
+        return f"{delta // 60}m ago"
+    return f"{delta // 3600}h ago"
+
+
+def _format_uptime(uptime_seconds: int) -> str:
+    """Format process uptime as d/h/m/s."""
+    seconds = max(0, uptime_seconds)
+    days, rem = divmod(seconds, 86_400)
+    hours, rem = divmod(rem, 3_600)
+    minutes, secs = divmod(rem, 60)
+
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    if minutes or hours or days:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+async def handle_status_command(chat_id: str, command_text: str) -> str:
+    """Handle /status [resources] command using in-memory observability snapshots."""
+    parts = command_text.strip().split()
+    mode = parts[1].lower() if len(parts) > 1 else ""
+
+    if mode not in {"", "resources"}:
+        return "Usage: /status [resources]"
+
+    if mode == "resources":
+        payload = get_resource_snapshot_data()
+        if payload is None:
+            return "Status unavailable: snapshot not collected yet."
+
+        resources = payload["resources"]
+        lag = resources["event_loop_lag_ms"]
+        lag_text = "N/A" if lag is None else f"{float(lag):.1f} ms"
+        return (
+            "Resource Usage\n\n"
+            f"CPU: {float(resources['cpu_percent']):.1f}%\n"
+            f"RAM: {int(resources['ram_mb'])} MB\n"
+            f"Database: {float(resources['db_size_mb']):.1f} MB\n"
+            f"Logs: {float(resources['log_size_mb']):.1f} MB\n"
+            f"Snapshots: {int(resources['snapshot_count'])}\n"
+            f"Event Loop Lag: {lag_text}"
+        )
+
+    payload = get_status_snapshot_data()
+    if payload is None:
+        return "Status unavailable: snapshot not collected yet."
+
+    process = payload["process"]
+    scheduler = payload["scheduler"]
+    broker = payload["broker"]
+    notifier = payload["notifier"]
+    in_flight = broker["in_flight_operations"][:5]
+    in_flight_count = len(broker["in_flight_operations"])
+
+    if in_flight:
+        in_flight_lines = "\n".join(
+            f"- {item.get('tool', '?')} (Tier {item.get('tier', '?')}, {item.get('elapsed_s', '?')}s)"
+            for item in in_flight
+        )
+    else:
+        in_flight_lines = "- none"
+
+    results = broker["last_10_results"]
+    if results:
+        result_text = ", ".join(
+            f"{status}: {count}" for status, count in sorted(results.items())
+        )
+    else:
+        result_text = "none"
+
+    supervisor = process["supervisor"] or "none"
+    supervisor_status = process["supervisor_status"] or "unknown"
+    last_tick_ts = int(scheduler["last_tick_timestamp"])
+    last_tick = (
+        scheduler["last_tick_local"]
+        if last_tick_ts <= 0
+        else _format_elapsed(last_tick_ts)
+    )
+
+    return (
+        "System Status\n\n"
+        f"Uptime: {_format_uptime(int(process['uptime_seconds']))}\n"
+        f"Version: {process['version']}\n"
+        f"Supervisor: {supervisor} ({supervisor_status})\n"
+        f"Last scheduler tick: {last_tick}\n"
+        f"Last broker activity: {_format_elapsed(int(broker['last_operation_timestamp']))}\n"
+        f"In-flight operations: {in_flight_count}\n"
+        f"{in_flight_lines}\n"
+        f"Notification outbox: {int(notifier['pending_count'])} pending\n"
+        f"DST transitions handled (today UTC): {get_dst_transition_count()}\n"
+        f"Last 10 operations: {result_text}"
+    )
+
+
+async def handle_health_command(chat_id: str) -> str:
+    """Handle /health command using in-memory observability snapshots."""
+    _ = chat_id  # Reserved for future chat-specific formatting.
+
+    payload = get_health_snapshot()
+    if payload is None:
+        return "Health unavailable: snapshot not collected yet."
+
+    overall = payload["overall_status"]
+    checks = payload["checks"]
+
+    overall_emoji = {
+        "healthy": "✅",
+        "degraded": "⚠️",
+        "unhealthy": "❌",
+        "unknown": "❔",
+    }.get(overall, "❔")
+
+    if not checks:
+        return f"{overall_emoji} System Health: {overall.upper()}\n\nNo health checks available yet."
+
+    lines = [f"{overall_emoji} System Health: {overall.upper()}", "", "Health Checks:"]
+    for check in checks:
+        status = check["status"]
+        status_icon = "✅" if status == "pass" else ("⚠️" if status == "warn" else "❌")
+        line = f"{status_icon} {check['name']}: {status} - {check['message']}"
+        details = check.get("details") or {}
+        if status in {"warn", "fail"} and details:
+            detail_text = ", ".join(f"{k}={v}" for k, v in details.items())
+            line = f"{line} ({detail_text})"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+async def handle_schedule_command(chat_id: str, command_text: str) -> str:
+    """Handle /schedule create/list/disable/enable/delete/edit commands."""
+    if _schedule_broker is None:
+        return "Scheduler unavailable: broker not initialized."
+
+    usage = (
+        'Usage: /schedule create <name> "<cron_expr>" <timezone> <action> | '
+        "/schedule list | /schedule disable <name> | /schedule enable <name> | "
+        '/schedule delete <name> | /schedule edit <name> <cron_expr|timezone|action> "<value>"'
+    )
+
+    try:
+        parts = shlex.split(command_text.strip())
+    except ValueError:
+        return usage
+
+    if len(parts) < 2:
+        return usage
+
+    subcommand = parts[1].lower()
+    if subcommand == "list":
+        result = await _schedule_broker.route_operation(
+            capability="scheduler",
+            action="list",
+            params={"enabled_only": False},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            message = (result.error or {}).get("message", "Operation denied")
+            return f"❌ Failed to list schedules: {message}"
+        jobs = (result.result or {}).get("jobs", [])
+        if not jobs:
+            return "No scheduled jobs found."
+        lines = ["Scheduled Jobs:"]
+        for job in jobs:
+            next_run = (job.get("next_run_local") or {}).get("local_datetime") or "unknown"
+            enabled = bool(job.get("enabled", False))
+            status = "✓ enabled" if enabled else "✗ disabled"
+            last_run = job.get("last_completed_slot")
+            last_run_text = "never" if not last_run else str(last_run)
+            lines.append(
+                f"- {job.get('name')} | {status} | cron={job.get('cron_expr')} | tz={job.get('timezone')} | last={last_run_text} | next={next_run}"
+            )
+        return "\n".join(lines)
+
+    if subcommand == "disable":
+        if len(parts) != 3:
+            return usage
+        name = parts[2]
+        result = await _schedule_broker.route_operation(
+            capability="scheduler",
+            action="disable",
+            params={"name": name},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            message = (result.error or {}).get("message", "Operation denied")
+            return f"❌ Failed to disable schedule: {message}"
+        if not (result.result or {}).get("updated"):
+            return f"❌ Job not found: {name}"
+        return f"✅ Job disabled: {name}"
+
+    if subcommand == "enable":
+        if len(parts) != 3:
+            return usage
+        name = parts[2]
+        result = await _schedule_broker.route_operation(
+            capability="scheduler",
+            action="enable",
+            params={"name": name},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            message = (result.error or {}).get("message", "Operation denied")
+            return f"❌ Failed to enable schedule: {message}"
+        if not (result.result or {}).get("updated"):
+            return f"❌ Job not found: {name}"
+        list_result = await _schedule_broker.route_operation(
+            capability="scheduler",
+            action="list",
+            params={"enabled_only": False},
+            chat_id=chat_id,
+        )
+        next_run = "unknown"
+        if list_result.allowed:
+            for job in (list_result.result or {}).get("jobs", []):
+                if job.get("name") == name:
+                    next_run = (job.get("next_run_local") or {}).get("local_datetime") or "unknown"
+                    break
+        return f"✅ Job enabled: {name} | Next run: {next_run}"
+
+    if subcommand == "delete":
+        if len(parts) != 3:
+            return usage
+        name = parts[2]
+        result = await _schedule_broker.route_operation(
+            capability="scheduler",
+            action="delete",
+            params={"name": name},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            message = (result.error or {}).get("message", "Operation denied")
+            return f"❌ Failed to delete schedule: {message}"
+        if not (result.result or {}).get("deleted"):
+            return f"❌ Job not found: {name}"
+        return f"✅ Job deleted: {name}"
+
+    if subcommand == "edit":
+        if len(parts) != 5:
+            return usage
+        name = parts[2]
+        param = parts[3]
+        value = parts[4]
+        if param not in {"cron_expr", "timezone", "action"}:
+            return "❌ Invalid parameter for edit. Allowed: cron_expr, timezone, action"
+        result = await _schedule_broker.route_operation(
+            capability="scheduler",
+            action="edit",
+            params={"name": name, "updates": {param: value}},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            message = (result.error or {}).get("message", "Operation denied")
+            return f"❌ Failed to edit schedule: {message}"
+        if not (result.result or {}).get("updated"):
+            return f"❌ Job not found: {name}"
+        job = (result.result or {}).get("job") or {}
+        next_run = (job.get("next_run_local") or {}).get("local_datetime") or "unknown"
+        return (
+            f"✅ Job updated: {name}\n"
+            f"Cron: {job.get('cron_expr')}\n"
+            f"Timezone: {job.get('timezone')}\n"
+            f"Action: {job.get('action')}\n"
+            f"Next run: {next_run}"
+        )
+
+    if subcommand != "create":
+        return usage
+
+    if len(parts) != 6:
+        return usage
+
+    _, _, name, cron_expr, timezone, action = parts
+    result = await _schedule_broker.route_operation(
+        capability="scheduler",
+        action="create",
+        params={
+            "name": name,
+            "cron_expr": cron_expr,
+            "timezone": timezone,
+            "action": action,
+            "enabled": True,
+        },
+        chat_id=chat_id,
+    )
+    if not result.allowed:
+        message = (result.error or {}).get("message", "Operation denied")
+        return f"❌ Failed to create schedule: {message}"
+
+    job = result.result or {}
+    next_run_text = "unknown"
+    try:
+        next_run = croniter(job["cron_expr"], datetime.now(ZoneInfo(job["timezone"]))).get_next(datetime)
+        next_run_text = next_run.isoformat()
+    except Exception:
+        pass
+
+    return (
+        "✅ Scheduled job created\n\n"
+        f"Name: {job.get('name')}\n"
+        f"Cron: {job.get('cron_expr')}\n"
+        f"Timezone: {job.get('timezone')}\n"
+        f"Action: {job.get('action')}\n"
+        f"Next run: {next_run_text}"
+    )
+
+
+async def handle_heartbeat_command(chat_id: str, command_text: str) -> str:
+    """Handle /heartbeat status|configure|disable|enable command."""
+    parts = command_text.strip().split()
+    if len(parts) < 2:
+        return (
+            "Usage: /heartbeat status | configure | disable | enable\n\n"
+            "The heartbeat is a daily status report sent automatically."
+        )
+
+    subcommand = parts[1].lower()
+
+    try:
+        job = await get_job_by_name("Daily Heartbeat")
+    except Exception as exc:  # noqa: BLE001
+        return f"❌ Failed to query heartbeat job: {exc}"
+
+    if job is None:
+        return (
+            "❌ Heartbeat job not found.\n\n"
+            "The 'Daily Heartbeat' job should be created automatically on startup. "
+            "Try restarting SohnBot or create it manually:\n"
+            '/schedule create "Daily Heartbeat" "0 18 * * *" UTC heartbeat'
+        )
+
+    if subcommand == "status":
+        status = "✅ Enabled" if job.get("enabled") else "❌ Disabled"
+        next_run = "unknown"
+        if _schedule_broker is not None:
+            listed = await _schedule_broker.route_operation(
+                capability="scheduler",
+                action="list",
+                params={"enabled_only": False},
+                chat_id=chat_id,
+            )
+            if listed.allowed:
+                for listed_job in (listed.result or {}).get("jobs", []):
+                    if listed_job.get("name") == "Daily Heartbeat":
+                        next_run = (listed_job.get("next_run_local") or {}).get("local_datetime") or "unknown"
+                        job = listed_job
+                        break
+        last_run = job.get("last_completed_slot")
+        last_run_text = str(last_run) if last_run else "never"
+        return (
+            "📊 Heartbeat Status\n\n"
+            f"Status: {status}\n"
+            f"Schedule: {job.get('cron_expr')}\n"
+            f"Timezone: {job.get('timezone')}\n"
+            f"Next run: {next_run}\n"
+            f"Last run: {last_run_text}"
+        )
+
+    if subcommand == "configure":
+        return (
+            "🔧 Heartbeat Configuration\n\n"
+            "To modify the heartbeat schedule, use:\n"
+            '/schedule edit "Daily Heartbeat" cron_expr "YOUR_CRON"\n'
+            '/schedule edit "Daily Heartbeat" timezone YOUR_TIMEZONE\n\n'
+            "Examples:\n"
+            '- Daily at 6pm: "0 18 * * *"\n'
+            '- Daily at 9am: "0 9 * * *"\n'
+            '- Twice daily (9am, 6pm): "0 9,18 * * *"\n\n'
+            "Check current status: /heartbeat status"
+        )
+
+    if subcommand in {"disable", "enable"}:
+        if _schedule_broker is None:
+            return "Scheduler unavailable: broker not initialized."
+        action = "disable" if subcommand == "disable" else "enable"
+        result = await _schedule_broker.route_operation(
+            capability="scheduler",
+            action=action,
+            params={"name": "Daily Heartbeat"},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            message = (result.error or {}).get("message", "Operation denied")
+            return f"❌ Failed to {action} heartbeat: {message}"
+
+        if not (result.result or {}).get("updated"):
+            return f"❌ Failed to {action} heartbeat job"
+
+        if action == "disable":
+            return "✅ Heartbeat disabled. Re-enable with: /heartbeat enable"
+
+        next_run = "unknown"
+        enabled_job = (result.result or {}).get("job")
+        if enabled_job:
+            next_run = (enabled_job.get("next_run_local") or {}).get("local_datetime") or "unknown"
+        return f"✅ Heartbeat enabled. Next report: {next_run}"
+
+    return "Unknown subcommand. Usage:\n/heartbeat status | configure | disable | enable"

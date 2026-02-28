@@ -8,7 +8,14 @@ import structlog
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from .commands import handle_notify_command
+from .commands import (
+    handle_heartbeat_command,
+    handle_health_command,
+    handle_notify_command,
+    handle_schedule_command,
+    handle_status_command,
+    set_schedule_broker,
+)
 from .formatters import format_for_telegram
 from .notification_worker import NotificationWorker
 
@@ -39,6 +46,8 @@ class TelegramClient:
         self.message_router = message_router
         self.application = None
         self.notification_worker = notification_worker
+        broker = getattr(getattr(message_router, "agent_session", None), "broker", None)
+        set_schedule_broker(broker)
 
     async def start(self):
         """Initialize and start the bot with polling."""
@@ -57,6 +66,10 @@ class TelegramClient:
         self.application.add_handler(CommandHandler("start", self.cmd_start))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
         self.application.add_handler(CommandHandler("notify", self.cmd_notify))
+        self.application.add_handler(CommandHandler("status", self.cmd_status))
+        self.application.add_handler(CommandHandler("health", self.cmd_health))
+        self.application.add_handler(CommandHandler("schedule", self.cmd_schedule))
+        self.application.add_handler(CommandHandler("heartbeat", self.cmd_heartbeat))
 
         # Start polling
         await self.application.initialize()
@@ -199,6 +212,62 @@ class TelegramClient:
             return
 
         response = await handle_notify_command(str(chat_id), update.message.text or "")
+        await update.message.reply_text(response)
+
+    async def cmd_status(self, update: Update, context):
+        """Handle /status [resources] command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_status_command", chat_id=chat_id)
+            return
+
+        response = await handle_status_command(str(chat_id), update.message.text or "")
+        await update.message.reply_text(response)
+
+    async def cmd_health(self, update: Update, context):
+        """Handle /health command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_health_command", chat_id=chat_id)
+            return
+
+        response = await handle_health_command(str(chat_id))
+        await update.message.reply_text(response)
+
+    async def cmd_schedule(self, update: Update, context):
+        """Handle /schedule create <name> \"<cron_expr>\" <timezone> <action> command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_schedule_command", chat_id=chat_id)
+            return
+
+        response = await handle_schedule_command(str(chat_id), update.message.text or "")
+        await update.message.reply_text(response)
+
+    async def cmd_heartbeat(self, update: Update, context):
+        """Handle /heartbeat status|configure|disable|enable command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_heartbeat_command", chat_id=chat_id)
+            return
+
+        response = await handle_heartbeat_command(str(chat_id), update.message.text or "")
         await update.message.reply_text(response)
 
     async def send_message(self, chat_id: int, text: str) -> bool:

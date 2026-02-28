@@ -220,6 +220,182 @@ class TestTelegramClient:
         client.application.stop.assert_called_once()
         client.application.shutdown.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_cmd_status_authorized(self, message_router):
+        """Authorized /status command should reply with status text."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 123456789
+        update.message.text = "/status"
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_status_command",
+            new=AsyncMock(return_value="System Status"),
+        ) as status_handler:
+            await client.cmd_status(update, None)
+
+        status_handler.assert_awaited_once_with("123456789", "/status")
+        update.message.reply_text.assert_awaited_once_with("System Status")
+
+    @pytest.mark.asyncio
+    async def test_cmd_status_unauthorized(self, message_router):
+        """Unauthorized /status command should be ignored."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 111111111
+        update.message.text = "/status"
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_status_command",
+            new=AsyncMock(return_value="System Status"),
+        ) as status_handler:
+            await client.cmd_status(update, None)
+
+        status_handler.assert_not_awaited()
+        update.message.reply_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cmd_health_authorized(self, message_router):
+        """Authorized /health command should reply with health text."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 123456789
+        update.message.text = "/health"
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_health_command",
+            new=AsyncMock(return_value="System Health: HEALTHY"),
+        ) as health_handler:
+            await client.cmd_health(update, None)
+
+        health_handler.assert_awaited_once_with("123456789")
+        update.message.reply_text.assert_awaited_once_with("System Health: HEALTHY")
+
+    @pytest.mark.asyncio
+    async def test_cmd_health_unauthorized(self, message_router):
+        """Unauthorized /health command should be ignored."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 111111111
+        update.message.text = "/health"
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_health_command",
+            new=AsyncMock(return_value="System Health: HEALTHY"),
+        ) as health_handler:
+            await client.cmd_health(update, None)
+
+        health_handler.assert_not_awaited()
+        update.message.reply_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cmd_schedule_authorized(self, message_router):
+        """Authorized /schedule command should reply with scheduler text."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 123456789
+        update.message.text = '/schedule create morning \"0 9 * * *\" UTC heartbeat'
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_schedule_command",
+            new=AsyncMock(return_value="✅ Scheduled job created"),
+        ) as schedule_handler:
+            await client.cmd_schedule(update, None)
+
+        schedule_handler.assert_awaited_once()
+        update.message.reply_text.assert_awaited_once_with("✅ Scheduled job created")
+
+    @pytest.mark.asyncio
+    async def test_cmd_schedule_unauthorized(self, message_router):
+        """Unauthorized /schedule command should be ignored."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 111111111
+        update.message.text = '/schedule create morning \"0 9 * * *\" UTC heartbeat'
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_schedule_command",
+            new=AsyncMock(return_value="✅ Scheduled job created"),
+        ) as schedule_handler:
+            await client.cmd_schedule(update, None)
+
+        schedule_handler.assert_not_awaited()
+        update.message.reply_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cmd_heartbeat_authorized(self, message_router):
+        """Authorized /heartbeat command should reply with heartbeat text."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 123456789
+        update.message.text = "/heartbeat status"
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_heartbeat_command",
+            new=AsyncMock(return_value="📊 Heartbeat Status"),
+        ) as heartbeat_handler:
+            await client.cmd_heartbeat(update, None)
+
+        heartbeat_handler.assert_awaited_once_with("123456789", "/heartbeat status")
+        update.message.reply_text.assert_awaited_once_with("📊 Heartbeat Status")
+
+    @pytest.mark.asyncio
+    async def test_cmd_heartbeat_unauthorized(self, message_router):
+        """Unauthorized /heartbeat command should be ignored."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 111111111
+        update.message.text = "/heartbeat status"
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_heartbeat_command",
+            new=AsyncMock(return_value="ignored"),
+        ) as heartbeat_handler:
+            await client.cmd_heartbeat(update, None)
+
+        heartbeat_handler.assert_not_awaited()
+        update.message.reply_text.assert_not_called()
+
 
 class TestFormatters:
     """Test message formatting functions."""

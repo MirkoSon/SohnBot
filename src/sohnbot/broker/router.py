@@ -16,6 +16,15 @@ from ..capabilities.git import (
     git_diff,
     git_status,
 )
+from ..capabilities.scheduler import (
+    create_job,
+    delete_job,
+    disable_job,
+    edit_job,
+    enable_job,
+    get_job_by_name,
+    list_jobs,
+)
 from .operation_classifier import classify_tier
 from .scope_validator import ScopeValidator
 from ..persistence.audit import log_operation_start, log_operation_end
@@ -325,6 +334,77 @@ class BrokerRouter:
                         },
                     )
 
+        if capability == "scheduler":
+            if action == "create":
+                required = {"name", "cron_expr", "timezone", "action"}
+                missing = sorted([key for key in required if key not in params])
+                if missing:
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": f"Missing required parameters: {', '.join(missing)}",
+                            "details": {"action": action, "missing": missing},
+                            "retryable": False,
+                        },
+                    )
+            if action == "delete" and "job_id" not in params and "name" not in params:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameter: job_id",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+            if action in {"disable", "enable"} and "name" not in params and "job_id" not in params:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameter: name or job_id",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+            if action == "edit":
+                if "name" not in params and "job_id" not in params:
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "Missing required parameter: name or job_id",
+                            "details": {"action": action},
+                            "retryable": False,
+                        },
+                    )
+                if "updates" not in params or not isinstance(params.get("updates"), dict):
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "Missing or invalid required parameter: updates",
+                            "details": {"action": action},
+                            "retryable": False,
+                        },
+                    )
+
         # 4. Check limits (e.g., max command profiles per request)
         # TODO: Implement limit checking (Story 1.5+)
 
@@ -341,8 +421,15 @@ class BrokerRouter:
         # 6. Execute capability (with snapshot if Tier 1/2)
         snapshot_ref = None
         try:
-            # Skip snapshot creation for git operations (they ARE the snapshot operations)
-            if tier in (1, 2) and not (capability == "git" and action in {"rollback", "list_snapshots", "checkout", "commit", "prune_snapshots"}):
+            # Skip snapshot creation for operations that do not modify filesystem state.
+            if (
+                tier in (1, 2)
+                and not (
+                    capability == "git"
+                    and action in {"rollback", "list_snapshots", "checkout", "commit", "prune_snapshots"}
+                )
+                and capability != "scheduler"
+            ):
                 # Create git snapshot branch before execution
                 snapshot_ref = await self._create_snapshot(
                     operation_id, file_path=params.get("path")
@@ -659,6 +746,52 @@ class BrokerRouter:
                     operation_id=operation_id,
                     timeout_seconds=timeout,
                 )
+
+        if capability == "scheduler":
+            async def _resolve_job_id() -> str | None:
+                if params.get("job_id"):
+                    return str(params["job_id"])
+                if params.get("name"):
+                    job = await get_job_by_name(str(params["name"]))
+                    return str(job["id"]) if job else None
+                return None
+
+            if action == "create":
+                return await create_job(
+                    name=params["name"],
+                    cron_expr=params["cron_expr"],
+                    timezone=params["timezone"],
+                    action=params["action"],
+                    action_params=params.get("action_params"),
+                    enabled=bool(params.get("enabled", True)),
+                )
+            if action == "list":
+                jobs = await list_jobs(enabled_only=bool(params.get("enabled_only", False)))
+                return {"jobs": jobs}
+            if action == "delete":
+                job_id = await _resolve_job_id()
+                if not job_id:
+                    return {"deleted": False}
+                deleted = await delete_job(job_id=job_id)
+                return {"deleted": deleted, "job_id": job_id}
+            if action == "disable":
+                job_id = await _resolve_job_id()
+                if not job_id:
+                    return {"updated": False}
+                updated = await disable_job(job_id=job_id)
+                return {"updated": updated, "job_id": job_id, "enabled": False}
+            if action == "enable":
+                job_id = await _resolve_job_id()
+                if not job_id:
+                    return {"updated": False}
+                updated = await enable_job(job_id=job_id)
+                return {"updated": updated, "job_id": job_id, "enabled": True}
+            if action == "edit":
+                job_id = await _resolve_job_id()
+                if not job_id:
+                    return {"updated": False, "job": None}
+                job = await edit_job(job_id=job_id, updates=params["updates"])
+                return {"updated": job is not None, "job_id": job_id, "job": job}
 
         return await self._execute_capability_placeholder(capability, action, params, operation_id)
 

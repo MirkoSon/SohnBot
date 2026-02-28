@@ -80,6 +80,12 @@ class AgentSession:
                 "mcp__sohnbot__git__commit",
                 "mcp__sohnbot__git__rollback",
                 "mcp__sohnbot__git__checkout",
+                "mcp__sohnbot__sched__create",
+                "mcp__sohnbot__sched__list",
+                "mcp__sohnbot__sched__disable",
+                "mcp__sohnbot__sched__enable",
+                "mcp__sohnbot__sched__delete",
+                "mcp__sohnbot__sched__edit",
             ],
             hooks={
                 "PreToolUse": [validate_tool_use]

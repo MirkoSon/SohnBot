@@ -52,6 +52,37 @@ class TestMCPTools:
         # Server should exist (actual tool invocation would require SDK)
         assert server is not None
 
+    def test_scheduler_tools_registered_with_expected_schemas(self, mock_broker, mock_config):
+        """Scheduler tool schemas are registered as expected."""
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+
+        assert "sched__create" in by_name
+        assert "sched__list" in by_name
+        assert "sched__disable" in by_name
+        assert "sched__enable" in by_name
+        assert "sched__delete" in by_name
+        assert "sched__edit" in by_name
+        assert by_name["sched__create"].input_schema == {
+            "name": str,
+            "cron_expr": str,
+            "timezone": str,
+            "action": str,
+            "action_params": dict,
+            "enabled": bool,
+        }
+        assert by_name["sched__list"].input_schema == {"enabled_only": bool}
+        assert by_name["sched__disable"].input_schema == {"name": str}
+        assert by_name["sched__enable"].input_schema == {"name": str}
+        assert by_name["sched__delete"].input_schema == {"name": str}
+        assert by_name["sched__edit"].input_schema == {"name": str, "parameter": str, "value": str}
+
 
 class TestPreToolUseHook:
     """Test PreToolUse hook validation."""
@@ -123,6 +154,15 @@ class TestPreToolUseHook:
             "mcp__sohnbot__git__prune_snapshots",
             "mcp__sohnbot__git__rollback",
             "mcp__sohnbot__git__checkout",
+            "mcp__sohnbot__sched__create",
+            "mcp__sohnbot__sched__list",
+            "mcp__sohnbot__sched__disable",
+            "mcp__sohnbot__sched__enable",
+            "mcp__sohnbot__sched__delete",
+            "mcp__sohnbot__sched__edit",
+            "mcp__sohnbot__observe__status",
+            "mcp__sohnbot__observe__resources",
+            "mcp__sohnbot__observe__health",
         ]
 
         for tool_name in tool_names:

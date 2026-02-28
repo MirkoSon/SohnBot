@@ -104,3 +104,86 @@ def update_snapshot_cache(snapshot: StatusSnapshot) -> None:
     """Update the global in-memory snapshot cache (called by snapshot_collector)."""
     global _snapshot_cache
     _snapshot_cache = snapshot
+
+
+def get_status_snapshot_data() -> Optional[dict]:
+    """Return a compact read-only status payload for Telegram/MCP consumers."""
+    snapshot = get_current_snapshot()
+    if snapshot is None:
+        return None
+
+    return {
+        "timestamp": snapshot.timestamp,
+        "process": {
+            "pid": snapshot.process.pid,
+            "uptime_seconds": snapshot.process.uptime_seconds,
+            "version": snapshot.process.version,
+            "supervisor": snapshot.process.supervisor,
+            "supervisor_status": snapshot.process.supervisor_status,
+        },
+        "scheduler": {
+            "last_tick_timestamp": snapshot.scheduler.last_tick_timestamp,
+            "last_tick_local": snapshot.scheduler.last_tick_local,
+        },
+        "broker": {
+            "last_operation_timestamp": snapshot.broker.last_operation_timestamp,
+            "in_flight_operations": snapshot.broker.in_flight_operations,
+            "last_10_results": snapshot.broker.last_10_results,
+        },
+        "notifier": {
+            "pending_count": snapshot.notifier.pending_count,
+        },
+    }
+
+
+def get_resource_snapshot_data() -> Optional[dict]:
+    """Return a compact read-only resource payload for Telegram/MCP consumers."""
+    snapshot = get_current_snapshot()
+    if snapshot is None:
+        return None
+
+    return {
+        "timestamp": snapshot.timestamp,
+        "resources": {
+            "cpu_percent": snapshot.resources.cpu_percent,
+            "ram_mb": snapshot.resources.ram_mb,
+            "db_size_mb": snapshot.resources.db_size_mb,
+            "log_size_mb": snapshot.resources.log_size_mb,
+            "snapshot_count": snapshot.resources.snapshot_count,
+            "event_loop_lag_ms": snapshot.resources.event_loop_lag_ms,
+        },
+    }
+
+
+def get_health_snapshot() -> Optional[dict]:
+    """Return health check results and overall status from the latest snapshot."""
+    snapshot = get_current_snapshot()
+    if snapshot is None:
+        return None
+
+    checks = [
+        {
+            "name": check.name,
+            "status": check.status,
+            "message": check.message,
+            "timestamp": check.timestamp,
+            "details": check.details,
+        }
+        for check in snapshot.health
+    ]
+
+    statuses = {check["status"] for check in checks}
+    if "fail" in statuses:
+        overall = "unhealthy"
+    elif "warn" in statuses:
+        overall = "degraded"
+    elif checks:
+        overall = "healthy"
+    else:
+        overall = "unknown"
+
+    return {
+        "timestamp": snapshot.timestamp,
+        "overall_status": overall,
+        "checks": checks,
+    }

@@ -211,8 +211,16 @@ class TestSecurityInvariants:
         assert key.validator("::1") is True
 
         # Should reject non-localhost
-        assert key.validator("0.0.0.0") is False
-        assert key.validator("192.168.1.1") is False
+        with pytest.raises(ValueError, match="localhost only"):
+            key.validator("0.0.0.0")
+        with pytest.raises(ValueError, match="localhost only"):
+            key.validator("192.168.1.1")
+
+    def test_observability_http_keys_are_static(self):
+        """HTTP server binding and enablement keys require restart."""
+        assert get_config_key("observability.http_enabled").tier == "static"
+        assert get_config_key("observability.http_host").tier == "static"
+        assert get_config_key("observability.http_port").tier == "static"
 
     def test_scope_roots_is_static(self):
         """Scope roots must be static (security boundary)."""

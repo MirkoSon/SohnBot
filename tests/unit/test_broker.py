@@ -93,6 +93,7 @@ def test_classify_tier_0_read_operations():
     assert classify_tier("git", "status", 0) == 0
     assert classify_tier("git", "diff", 0) == 0
     assert classify_tier("git", "list_snapshots", 0) == 0
+    assert classify_tier("scheduler", "list", 0) == 0
     assert classify_tier("web", "search", 0) == 0
     assert classify_tier("profiles", "lint", 0) == 0
 
@@ -104,6 +105,11 @@ def test_classify_tier_1_single_file():
     assert classify_tier("git", "checkout", 1) == 1
     assert classify_tier("git", "prune_snapshots", 0) == 1
     assert classify_tier("git", "checkout", 0) == 1
+    assert classify_tier("scheduler", "create", 0) == 1
+    assert classify_tier("scheduler", "delete", 0) == 1
+    assert classify_tier("scheduler", "disable", 0) == 1
+    assert classify_tier("scheduler", "enable", 0) == 1
+    assert classify_tier("scheduler", "edit", 0) == 1
 
 
 def test_classify_tier_2_multi_file():

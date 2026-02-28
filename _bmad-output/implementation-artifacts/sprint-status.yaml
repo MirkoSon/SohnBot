@@ -59,23 +59,23 @@ development_status:
   2-4-enhanced-snapshot-branch-management: done
   epic-2-retrospective: done
 
-  epic-3: in-progress
+  epic-3: done
   3-1-runtime-status-snapshot-collection: done
   3-2-health-checks-implementation: done
-  3-3-system-status-via-telegram: ready-for-dev
-  3-4-health-checks-via-telegram: backlog
-  3-5-local-http-observability-server: backlog
-  3-6-html-status-page: backlog
-  epic-3-retrospective: optional
+  3-3-system-status-via-telegram: done
+  3-4-health-checks-via-telegram: done
+  3-5-local-http-observability-server: done
+  3-6-html-status-page: done
+  epic-3-retrospective: done
 
-  epic-4: backlog
-  4-1-job-creation-persistence: backlog
-  4-2-idempotent-job-execution-with-catch-up: backlog
-  4-3-timezone-aware-scheduling-with-dst-handling: backlog
-  4-4-job-timeout-enforcement: backlog
-  4-5-job-management-commands: backlog
-  4-6-daily-heartbeat-system: backlog
-  epic-4-retrospective: optional
+  epic-4: done
+  4-1-job-creation-persistence: done
+  4-2-idempotent-job-execution-with-catch-up: done
+  4-3-timezone-aware-scheduling-with-dst-handling: done
+  4-4-job-timeout-enforcement: done
+  4-5-job-management-commands: done
+  4-6-daily-heartbeat-system: done
+  epic-4-retrospective: done
 
   epic-5: backlog
   5-1-lint-project-profile: backlog

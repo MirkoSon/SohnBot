@@ -9,6 +9,13 @@ import structlog
 from claude_agent_sdk import create_sdk_mcp_server, tool
 from structlog.contextvars import get_contextvars
 
+from ..capabilities.observe import (
+    get_health_snapshot,
+    get_resource_snapshot_data,
+    get_status_snapshot_data,
+)
+from ..capabilities.scheduler.timezone_handler import get_dst_transition_count
+
 logger = structlog.get_logger(__name__)
 
 
@@ -69,6 +76,15 @@ def create_sohnbot_mcp_server(broker, config):
             return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
         return _as_mcp_text(_format_file_result(action, result.result or {}))
+
+    def _format_scheduler_job(job: dict) -> str:
+        next_run = job.get("next_run_local") or {}
+        next_run_local = next_run.get("local_datetime") or next_run.get("local") or "unknown"
+        return (
+            f"{job.get('name')} [{job.get('id')}] | cron={job.get('cron_expr')} | "
+            f"tz={job.get('timezone')} | action={job.get('action')} | enabled={job.get('enabled')} | "
+            f"next={next_run_local}"
+        )
 
     # File operations (Story 1.5 - stubs for now)
     @tool("fs__read", "Read file contents", {"path": str})
@@ -427,6 +443,236 @@ def create_sohnbot_mcp_server(broker, config):
             f"✅ Checked out local branch {data.get('branch', branch_name)} at {data.get('commit_hash', '?')}"
         )
 
+    @tool(
+        "sched__create",
+        "Create scheduled job",
+        {
+            "name": str,
+            "cron_expr": str,
+            "timezone": str,
+            "action": str,
+            "action_params": dict,
+            "enabled": bool,
+        },
+    )
+    async def sched_create(args):
+        """Create scheduler job via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        logger.info("mcp_tool_invoked", tool="sched__create", chat_id=chat_id, name=args.get("name"))
+
+        result = await broker.route_operation(
+            capability="scheduler",
+            action="create",
+            params={
+                "name": args.get("name"),
+                "cron_expr": args.get("cron_expr"),
+                "timezone": args.get("timezone"),
+                "action": args.get("action"),
+                "action_params": args.get("action_params"),
+                "enabled": bool(args.get("enabled", True)),
+            },
+            chat_id=chat_id,
+        )
+
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="sched__create", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+
+        job = result.result or {}
+        return _as_mcp_text(f"✅ Job created: {_format_scheduler_job(job)}")
+
+    @tool("sched__list", "List scheduled jobs", {"enabled_only": bool})
+    async def sched_list(args):
+        """List scheduler jobs via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        enabled_only = bool(args.get("enabled_only", False))
+        logger.info("mcp_tool_invoked", tool="sched__list", chat_id=chat_id, enabled_only=enabled_only)
+
+        result = await broker.route_operation(
+            capability="scheduler",
+            action="list",
+            params={"enabled_only": enabled_only},
+            chat_id=chat_id,
+        )
+
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="sched__list", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+
+        jobs = (result.result or {}).get("jobs", [])
+        if not jobs:
+            return _as_mcp_text("No scheduled jobs found.")
+        return _as_mcp_text("\n".join(_format_scheduler_job(job) for job in jobs))
+
+    @tool("sched__disable", "Disable scheduled job", {"name": str})
+    async def sched_disable(args):
+        """Disable scheduler job via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        name = args.get("name")
+        result = await broker.route_operation(
+            capability="scheduler",
+            action="disable",
+            params={"name": name},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="sched__disable", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+        if not (result.result or {}).get("updated"):
+            return _as_mcp_text(f"❌ Job not found: {name}")
+        return _as_mcp_text(f"✅ Job disabled: {name}")
+
+    @tool("sched__enable", "Enable scheduled job", {"name": str})
+    async def sched_enable(args):
+        """Enable scheduler job via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        name = args.get("name")
+        result = await broker.route_operation(
+            capability="scheduler",
+            action="enable",
+            params={"name": name},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="sched__enable", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+        if not (result.result or {}).get("updated"):
+            return _as_mcp_text(f"❌ Job not found: {name}")
+        return _as_mcp_text(f"✅ Job enabled: {name}")
+
+    @tool("sched__delete", "Delete scheduled job", {"name": str})
+    async def sched_delete(args):
+        """Delete scheduler job via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        name = args.get("name")
+        result = await broker.route_operation(
+            capability="scheduler",
+            action="delete",
+            params={"name": name},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="sched__delete", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+        if not (result.result or {}).get("deleted"):
+            return _as_mcp_text(f"❌ Job not found: {name}")
+        return _as_mcp_text(f"✅ Job deleted: {name}")
+
+    @tool("sched__edit", "Edit scheduled job", {"name": str, "parameter": str, "value": str})
+    async def sched_edit(args):
+        """Edit scheduler job via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        name = args.get("name")
+        parameter = args.get("parameter")
+        value = args.get("value")
+        if parameter not in {"cron_expr", "timezone", "action"}:
+            return _as_mcp_text("❌ Invalid parameter. Allowed: cron_expr, timezone, action")
+        result = await broker.route_operation(
+            capability="scheduler",
+            action="edit",
+            params={"name": name, "updates": {parameter: value}},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="sched__edit", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+        if not (result.result or {}).get("updated"):
+            return _as_mcp_text(f"❌ Job not found: {name}")
+        job = (result.result or {}).get("job") or {}
+        return _as_mcp_text(f"✅ Job updated: {_format_scheduler_job(job)}")
+
+    @tool("observe__status", "Get current system status snapshot", {})
+    async def observe_status(args):
+        """Read latest status snapshot from in-memory observability cache."""
+        _ = args  # Unused by schema design.
+        payload = get_status_snapshot_data()
+        if payload is None:
+            return _as_mcp_text("Status unavailable: snapshot not collected yet.")
+
+        process = payload["process"]
+        scheduler = payload["scheduler"]
+        broker_data = payload["broker"]
+        notifier = payload["notifier"]
+        last_tick = scheduler["last_tick_local"]
+        if int(scheduler["last_tick_timestamp"]) > 0:
+            last_tick = str(scheduler["last_tick_timestamp"])
+
+        results = broker_data["last_10_results"]
+        result_text = (
+            ", ".join(f"{status}: {count}" for status, count in sorted(results.items()))
+            if results
+            else "none"
+        )
+        return _as_mcp_text(
+            "System Status\n"
+            f"Version: {process['version']}\n"
+            f"Uptime (s): {process['uptime_seconds']}\n"
+            f"Supervisor: {process['supervisor'] or 'none'}\n"
+            f"Last scheduler tick: {last_tick}\n"
+            f"DST transitions handled (today UTC): {get_dst_transition_count()}\n"
+            f"Last broker activity ts: {broker_data['last_operation_timestamp']}\n"
+            f"In-flight ops: {len(broker_data['in_flight_operations'])}\n"
+            f"Outbox pending: {notifier['pending_count']}\n"
+            f"Last 10 results: {result_text}"
+        )
+
+    @tool("observe__resources", "Get current resource usage snapshot", {})
+    async def observe_resources(args):
+        """Read latest resource snapshot from in-memory observability cache."""
+        _ = args  # Unused by schema design.
+        payload = get_resource_snapshot_data()
+        if payload is None:
+            return _as_mcp_text("Status unavailable: snapshot not collected yet.")
+
+        resources = payload["resources"]
+        lag = resources["event_loop_lag_ms"]
+        lag_text = "N/A" if lag is None else f"{float(lag):.1f} ms"
+        return _as_mcp_text(
+            "Resource Usage\n"
+            f"CPU: {float(resources['cpu_percent']):.1f}%\n"
+            f"RAM: {int(resources['ram_mb'])} MB\n"
+            f"Database: {float(resources['db_size_mb']):.1f} MB\n"
+            f"Logs: {float(resources['log_size_mb']):.1f} MB\n"
+            f"Snapshots: {int(resources['snapshot_count'])}\n"
+            f"Event Loop Lag: {lag_text}"
+        )
+
+    @tool("observe__health", "Get current health check snapshot", {})
+    async def observe_health(args):
+        """Read latest health snapshot from in-memory observability cache."""
+        _ = args  # Unused by schema design.
+        payload = get_health_snapshot()
+        if payload is None:
+            return _as_mcp_text("Health unavailable: snapshot not collected yet.")
+
+        overall = payload["overall_status"]
+        checks = payload["checks"]
+        if not checks:
+            return _as_mcp_text(f"System Health: {overall.upper()}\nNo health checks available yet.")
+
+        lines = [f"System Health: {overall.upper()}", "Health Checks:"]
+        for check in checks:
+            status = check["status"]
+            line = f"- {check['name']}: {status} - {check['message']}"
+            details = check.get("details") or {}
+            if status in {"warn", "fail"} and details:
+                detail_text = ", ".join(f"{k}={v}" for k, v in details.items())
+                line = f"{line} ({detail_text})"
+            lines.append(line)
+        return _as_mcp_text("\n".join(lines))
+
     # Create and return server
     return create_sdk_mcp_server(
         name="sohnbot",
@@ -446,5 +692,14 @@ def create_sohnbot_mcp_server(broker, config):
             git_prune_snapshots,
             git_rollback,
             git_checkout,
+            sched_create,
+            sched_list,
+            sched_disable,
+            sched_enable,
+            sched_delete,
+            sched_edit,
+            observe_status,
+            observe_resources,
+            observe_health,
         ]
     )

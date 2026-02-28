@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="30">
+    <title>SohnBot Status</title>
+    <style>
+        body {{
+            font-family: monospace;
+            margin: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }}
+        .header {{
+            margin-bottom: 20px;
+        }}
+        .health {{
+            font-weight: bold;
+            margin-bottom: 8px;
+        }}
+        .health.healthy {{
+            color: #4ec9b0;
+        }}
+        .health.degraded {{
+            color: #ce9178;
+        }}
+        .health.unhealthy {{
+            color: #f48771;
+        }}
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 10px;
+        }}
+        th, td {{
+            border: 1px solid #3e3e3e;
+            padding: 8px;
+            text-align: left;
+            vertical-align: top;
+        }}
+        th {{
+            background-color: #252526;
+        }}
+        .section {{
+            margin-top: 24px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>SohnBot Status</h1>
+        <div class="health {health_class}">{health_badge}</div>
+        <p>Uptime: {uptime} | Version: {version} | PID: {pid} | Supervisor: {supervisor}</p>
+    </div>
+
+    <div class="section">
+        <h2>Active Operations</h2>
+        <table>
+            <tr><th>Operation ID</th><th>Tool</th><th>Tier</th><th>Elapsed</th></tr>
+            {active_operations_rows}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>Scheduler Next Runs</h2>
+        <table>
+            <tr><th>Job</th><th>Next Run (Local)</th></tr>
+            {scheduler_rows}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>Resources</h2>
+        <p>CPU: {cpu_percent}% | RAM: {ram_mb} MB</p>
+        <p>DB: {db_size_mb} MB | Logs: {log_size_mb} MB</p>
+        <p>Snapshots: {snapshot_count} | Loop lag: {event_loop_lag_ms} ms</p>
+    </div>
+
+    <div class="section">
+        <h2>Latest Errors</h2>
+        <table>
+            <tr><th>Operation ID</th><th>Tool</th><th>Error</th><th>Timestamp</th></tr>
+            {error_rows}
+        </table>
+    </div>
+
+    <div class="section">
+        <p><em>Auto-refreshes every 30 seconds</em></p>
+    </div>
+</body>
+</html>

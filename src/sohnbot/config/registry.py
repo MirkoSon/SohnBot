@@ -14,6 +14,13 @@ from dataclasses import dataclass
 from typing import Any, Callable, Literal, Optional
 
 
+def _validate_localhost_host(value: str) -> bool:
+    """Enforce localhost-only HTTP observability binding."""
+    if value not in ("127.0.0.1", "::1"):
+        raise ValueError("HTTP server must bind to localhost only")
+    return True
+
+
 @dataclass
 class ConfigKey:
     """Defines a single configuration key with validation and tier classification.
@@ -89,6 +96,11 @@ REGISTRY: dict[str, ConfigKey] = {
         tier="static",
         value_type=list,
         default=[],
+    ),
+    "telegram.admin_chat_id": ConfigKey(
+        tier="dynamic",
+        value_type=str,
+        default="",
     ),
     "telegram.response_timeout_seconds": ConfigKey(
         tier="dynamic",
@@ -168,6 +180,16 @@ REGISTRY: dict[str, ConfigKey] = {
         min_value=60,
         max_value=3600,
     ),
+    "heartbeat.cron": ConfigKey(
+        tier="dynamic",
+        value_type=str,
+        default="0 18 * * *",
+    ),
+    "heartbeat.timezone": ConfigKey(
+        tier="dynamic",
+        value_type=str,
+        default="UTC",
+    ),
 
     # ===== COMMAND PROFILES (Dynamic - Timeout tuning) =====
     "commands.lint_timeout_seconds": ConfigKey(
@@ -217,7 +239,7 @@ REGISTRY: dict[str, ConfigKey] = {
 
     # ===== OBSERVABILITY (Static binding, Dynamic settings) =====
     "observability.http_enabled": ConfigKey(
-        tier="dynamic",
+        tier="static",
         value_type=bool,
         default=True,
     ),
@@ -232,7 +254,7 @@ REGISTRY: dict[str, ConfigKey] = {
         tier="static",
         value_type=str,
         default="127.0.0.1",
-        validator=lambda v: v in ("127.0.0.1", "::1"),  # Localhost only
+        validator=_validate_localhost_host,
     ),
     "observability.refresh_seconds": ConfigKey(
         tier="dynamic",

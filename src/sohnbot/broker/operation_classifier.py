@@ -26,6 +26,10 @@ def classify_tier(capability: str, action: str, file_count: int) -> int:
         ("git", "status"),
         ("git", "diff"),
         ("git", "list_snapshots"),
+        ("scheduler", "list"),
+        ("observe", "status"),
+        ("observe", "resources"),
+        ("observe", "health"),
         ("web", "search"),
         ("profiles", "lint"),  # Read-only execution
     }
@@ -43,6 +47,9 @@ def classify_tier(capability: str, action: str, file_count: int) -> int:
     if capability == "git":
         if action in {"checkout", "rollback", "commit", "prune_snapshots"}:
             return 1  # Local branch switch (state-changing)
+
+    if capability == "scheduler" and action in {"create", "delete", "disable", "enable", "edit"}:
+        return 1
 
     # Tier 2: Multi-file modifications (comprehensive snapshot)
     if file_count > 1:

@@ -34,6 +34,8 @@ retention_days = 90
 # Telegram bot configuration (STATIC allowed_chat_ids, DYNAMIC timeouts)
 # Chat IDs that are authorized to use the bot (empty = no restrictions for development)
 allowed_chat_ids = []
+# Admin chat ID for automated scheduler/heartbeat notifications (empty disables delivery)
+admin_chat_id = ""
 response_timeout_seconds = 30
 
 [broker]
@@ -59,7 +61,14 @@ retention_days = 30
 # Scheduler configuration (DYNAMIC - hot-reloadable)
 tick_seconds = 60
 max_concurrent_jobs = 3
+# Jobs exceeding this duration are treated as timed out by scheduler executor.
+# Timeout wraps action dispatch only (idempotency checks/logging occur outside boundary).
 job_timeout_seconds = 600
+
+[heartbeat]
+# Daily heartbeat report schedule (DYNAMIC - hot-reloadable)
+cron = "0 18 * * *"
+timezone = "UTC"
 
 [commands]
 # Command profile timeouts (DYNAMIC - hot-reloadable)
