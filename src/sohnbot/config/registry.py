@@ -38,6 +38,18 @@ def _validate_lint_command(value: str) -> bool:
     return True
 
 
+def _validate_build_command(value: str) -> bool:
+    """Reject empty strings and shell metacharacters in build command."""
+    if not value or not value.strip():
+        raise ValueError("build_command must not be empty")
+    if not _SAFE_COMMAND_RE.match(value):
+        raise ValueError(
+            "build_command contains disallowed characters; "
+            "use alphanumeric, spaces, dashes, underscores, dots, and slashes only"
+        )
+    return True
+
+
 @dataclass
 class ConfigKey:
     """Defines a single configuration key with validation and tier classification.
@@ -214,6 +226,12 @@ REGISTRY: dict[str, ConfigKey] = {
         value_type=str,
         default="pylint",
         validator=_validate_lint_command,
+    ),
+    "commands.build_command": ConfigKey(
+        tier="dynamic",
+        value_type=str,
+        default="make",
+        validator=_validate_build_command,
     ),
     "commands.lint_timeout_seconds": ConfigKey(
         tier="dynamic",
