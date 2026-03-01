@@ -408,7 +408,7 @@ class BrokerRouter:
 
         # Profiles capability parameter validation and scope checking
         if capability == "profiles":
-            if action in {"lint", "build"} and "repo_path" not in params:
+            if action in {"lint", "build", "test"} and "repo_path" not in params:
                 self._operation_start_times.pop(operation_id, None)
                 return BrokerResult(
                     allowed=False,
@@ -497,6 +497,36 @@ class BrokerRouter:
                             "code": "invalid_request",
                             "message": "target contains disallowed characters",
                             "details": {"target": target},
+                            "retryable": False,
+                        },
+                    )
+
+            pattern = params.get("pattern") or ""
+            if pattern:
+                from pathlib import PurePosixPath
+                if ".." in PurePosixPath(str(pattern)).parts:
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "scope_violation",
+                            "message": f"pattern contains path traversal: {pattern}",
+                            "details": {"pattern": pattern},
+                            "retryable": False,
+                        },
+                    )
+                if not _SAFE_PROFILE_RE.match(pattern):
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "pattern contains disallowed characters",
+                            "details": {"pattern": pattern},
                             "retryable": False,
                         },
                     )
@@ -926,6 +956,24 @@ class BrokerRouter:
                     target=params.get("target") or "",
                     timeout_seconds=int(timeout),
                 )
+            if action == "test":
+                from ..capabilities.command_profiles import execute_test_profile
+                command = (
+                    self.config_manager.get("commands.test_command")
+                    if self.config_manager
+                    else "pytest"
+                )
+                timeout = (
+                    self.config_manager.get("commands.test_timeout_seconds")
+                    if self.config_manager
+                    else 600
+                )
+                return await execute_test_profile(
+                    repo_path=params["repo_path"],
+                    command=command,
+                    pattern=params.get("pattern") or "",
+                    timeout_seconds=int(timeout),
+                )
 
         return await self._execute_capability_placeholder(capability, action, params, operation_id)
 
@@ -951,6 +999,13 @@ class BrokerRouter:
             exit_code = data.get("exit_code", "?")
             repo = params.get("repo_path", "-")
             return f"{passed} Build profile | exit_code={exit_code} | repo={repo}"
+
+        if capability == "profiles" and action == "test" and status == "completed":
+            data = result or {}
+            passed = "✅ PASSED" if data.get("passed") else "❌ FAILED"
+            exit_code = data.get("exit_code", "?")
+            repo = params.get("repo_path", "-")
+            return f"{passed} Test profile | exit_code={exit_code} | repo={repo}"
 
         if capability == "git" and action == "commit" and status == "completed":
             data = result or {}

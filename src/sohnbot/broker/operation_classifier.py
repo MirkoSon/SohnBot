@@ -33,6 +33,7 @@ def classify_tier(capability: str, action: str, file_count: int) -> int:
         ("web", "search"),
         ("profiles", "lint"),   # Read-only execution
         ("profiles", "build"),  # Read-only execution
+        ("profiles", "test"),   # Read-only execution
     }
     if (capability, action) in READ_ONLY_ACTIONS:
         return 0

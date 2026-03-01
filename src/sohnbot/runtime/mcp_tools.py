@@ -662,6 +662,41 @@ def create_sohnbot_mcp_server(broker, config):
         output = "\n".join(part for part in (stdout, stderr) if part)
         return _as_mcp_text(f"{status} (exit {exit_code})\n{output[:2000]}")
 
+    @tool("profiles__test", "Run project test suite", {"repo_path": str, "pattern": str})
+    async def profiles_test(args):
+        """Run test profile via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        repo_path = args.get("repo_path")
+        pattern = args.get("pattern") or ""
+        logger.info(
+            "mcp_tool_invoked",
+            tool="profiles__test",
+            repo_path=repo_path,
+            pattern=pattern,
+            chat_id=chat_id,
+        )
+
+        result = await broker.route_operation(
+            capability="profiles",
+            action="test",
+            params={"repo_path": repo_path, "pattern": pattern},
+            chat_id=chat_id,
+        )
+
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="profiles__test", error=error_msg)
+            return _as_mcp_text(f"❌ Test denied: {error_msg}")
+
+        data = result.result or {}
+        status = "✅ PASSED" if data.get("passed") else "❌ FAILED"
+        exit_code = data.get("exit_code", "?")
+        stdout = data.get("stdout", "")
+        stderr = data.get("stderr", "")
+        output = "\n".join(part for part in (stdout, stderr) if part)
+        return _as_mcp_text(f"{status} (exit {exit_code})\n{output[:2000]}")
+
     @tool("observe__status", "Get current system status snapshot", {})
     async def observe_status(args):
         """Read latest status snapshot from in-memory observability cache."""
@@ -769,6 +804,7 @@ def create_sohnbot_mcp_server(broker, config):
             sched_edit,
             profiles_lint,
             profiles_build,
+            profiles_test,
             observe_status,
             observe_resources,
             observe_health,

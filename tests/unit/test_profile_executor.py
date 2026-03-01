@@ -1,4 +1,4 @@
-"""Unit tests for execute_lint_profile and execute_build_profile capabilities."""
+"""Unit tests for execute_lint_profile, execute_build_profile, and execute_test_profile capabilities."""
 
 import asyncio
 import pytest
@@ -381,6 +381,179 @@ class TestExecuteLintProfileCancellation:
                     repo_path="/some/project",
                     command="pylint",
                     files=[],
+                    timeout_seconds=60,
+                )
+            )
+            await asyncio.sleep(0)  # Let the coroutine start
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            await run_and_cancel()
+
+        mock_proc.kill.assert_called_once()
+
+
+class TestExecuteTestProfile:
+    """Tests for execute_test_profile capability function."""
+
+    @pytest.mark.asyncio
+    async def test_test_success_returns_passed_true(self):
+        """Test suite passes → passed=True, exit_code=0."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_test_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b"5 passed.", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await execute_test_profile(
+                repo_path="/some/project",
+                command="pytest",
+                pattern="tests/unit/",
+                timeout_seconds=600,
+            )
+
+        assert result["passed"] is True
+        assert result["exit_code"] == 0
+        assert "5 passed." in result["stdout"]
+        assert result["stderr"] == ""
+        assert result["command_used"] == "pytest"
+        assert result["pattern"] == "tests/unit/"
+
+    @pytest.mark.asyncio
+    async def test_test_failure_returns_passed_false(self):
+        """Test suite fails → passed=False, exit_code=1."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_test_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 1
+        mock_proc.communicate = AsyncMock(return_value=(b"2 failed, 3 passed.", b"AssertionError"))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await execute_test_profile(
+                repo_path="/some/project",
+                command="pytest",
+                pattern="",
+                timeout_seconds=600,
+            )
+
+        assert result["passed"] is False
+        assert result["exit_code"] == 1
+        assert "2 failed" in result["stdout"]
+        assert "AssertionError" in result["stderr"]
+
+    @pytest.mark.asyncio
+    async def test_test_timeout_raises_and_kills_process(self):
+        """Subprocess exceeding timeout → TimeoutError raised, process killed and waited."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_test_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.kill = MagicMock()
+
+        async def slow_communicate():
+            await asyncio.sleep(100)
+            return b"", b""
+
+        mock_proc.communicate = slow_communicate
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            with pytest.raises(TimeoutError):
+                await execute_test_profile(
+                    repo_path="/some/project",
+                    command="pytest",
+                    pattern="",
+                    timeout_seconds=0,
+                )
+
+        mock_proc.kill.assert_called_once()
+        mock_proc.wait.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_test_no_pattern_runs_full_suite(self):
+        """Empty pattern runs command without pattern arg appended."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_test_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            result = await execute_test_profile(
+                repo_path="/some/project",
+                command="pytest",
+                pattern="",
+                timeout_seconds=600,
+            )
+
+        args_passed = mock_exec.call_args[0]
+        assert args_passed == ("pytest",)
+        assert result["pattern"] == ""
+
+    @pytest.mark.asyncio
+    async def test_test_with_pattern_appended_to_command(self):
+        """Pattern string is appended to command args."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_test_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await execute_test_profile(
+                repo_path="/some/project",
+                command="pytest",
+                pattern="tests/unit/test_broker.py",
+                timeout_seconds=600,
+            )
+
+        args_passed = mock_exec.call_args[0]
+        assert args_passed == ("pytest", "tests/unit/test_broker.py")
+
+    @pytest.mark.asyncio
+    async def test_test_cwd_set_to_repo_path(self):
+        """Subprocess cwd is set to repo_path."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_test_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            await execute_test_profile(
+                repo_path="/some/project",
+                command="pytest",
+                pattern="",
+                timeout_seconds=600,
+            )
+
+        kwargs = mock_exec.call_args[1]
+        assert kwargs["cwd"] == "/some/project"
+
+    @pytest.mark.asyncio
+    async def test_test_cancellation_kills_process(self):
+        """CancelledError while running subprocess kills and waits the process (no zombie)."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_test_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.kill = MagicMock()
+        mock_proc.returncode = None  # Process still running
+
+        async def blocking_communicate():
+            await asyncio.sleep(100)
+            return b"", b""
+
+        mock_proc.communicate = blocking_communicate
+
+        async def run_and_cancel():
+            task = asyncio.create_task(
+                execute_test_profile(
+                    repo_path="/some/project",
+                    command="pytest",
+                    pattern="",
                     timeout_seconds=60,
                 )
             )

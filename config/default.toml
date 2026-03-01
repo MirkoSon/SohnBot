@@ -40,7 +40,8 @@ response_timeout_seconds = 30
 
 [broker]
 # Broker operation timeouts (DYNAMIC - hot-reloadable)
-operation_timeout_seconds = 300
+# Must exceed the longest profile timeout (test_timeout_seconds = 600)
+operation_timeout_seconds = 700
 
 [files]
 # File operation limits (DYNAMIC - hot-reloadable)
@@ -76,6 +77,7 @@ lint_command = "pylint"
 lint_timeout_seconds = 60
 build_command = "make"
 build_timeout_seconds = 300
+test_command = "pytest"
 test_timeout_seconds = 600
 max_chain_length = 5
 
