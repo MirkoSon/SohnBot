@@ -83,6 +83,75 @@ class TestMCPTools:
         assert by_name["sched__delete"].input_schema == {"name": str}
         assert by_name["sched__edit"].input_schema == {"name": str, "parameter": str, "value": str}
 
+    def test_profiles_lint_tool_registered_with_expected_schema(self, mock_broker, mock_config):
+        """profiles__lint tool is registered with correct schema."""
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+
+        assert "profiles__lint" in by_name
+        assert by_name["profiles__lint"].input_schema == {"repo_path": str, "files": list}
+
+    @pytest.mark.asyncio
+    async def test_profiles_lint_routes_through_broker(self, mock_broker, mock_config):
+        """profiles__lint invokes broker.route_operation with correct capability/action."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=True,
+            error=None,
+            result={"passed": True, "exit_code": 0, "stdout": "ok", "stderr": "", "command_used": "pylint", "files_linted": []},
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        lint_tool = by_name["profiles__lint"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            await lint_tool.handler({"repo_path": "/some/project", "files": []})
+
+        mock_broker.route_operation.assert_called_once_with(
+            capability="profiles",
+            action="lint",
+            params={"repo_path": "/some/project", "files": []},
+            chat_id="test_chat",
+        )
+
+    @pytest.mark.asyncio
+    async def test_profiles_lint_denied_returns_error_message(self, mock_broker, mock_config):
+        """profiles__lint denied by broker returns error text."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=False,
+            error={"message": "scope_violation: path outside roots"},
+            result=None,
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        lint_tool = by_name["profiles__lint"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await lint_tool.handler({"repo_path": "/bad/path", "files": []})
+
+        content = result["content"][0]["text"]
+        assert "❌ Lint denied" in content
+        assert "scope_violation" in content
+
 
 class TestPreToolUseHook:
     """Test PreToolUse hook validation."""
@@ -163,6 +232,7 @@ class TestPreToolUseHook:
             "mcp__sohnbot__observe__status",
             "mcp__sohnbot__observe__resources",
             "mcp__sohnbot__observe__health",
+            "mcp__sohnbot__profiles__lint",
         ]
 
         for tool_name in tool_names:

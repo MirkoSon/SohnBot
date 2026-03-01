@@ -78,7 +78,7 @@ development_status:
   epic-4-retrospective: done
 
   epic-5: in-progress
-  5-1-lint-project-profile: ready-for-dev
+  5-1-lint-project-profile: review
   5-2-build-project-profile: backlog
   5-3-run-tests-profile: backlog
   5-4-ripgrep-search-profile: backlog

@@ -1,6 +1,6 @@
 # Story 5.1: Lint Project Profile
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -36,32 +36,32 @@ so that code quality is validated before commits.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `execute_lint_profile` capability function (AC: 1, 2, 3)
-  - [ ] 1.1 Create `src/sohnbot/capabilities/command_profiles/profile_executor.py` with `execute_lint_profile(repo_path, files, command, timeout_seconds)` using `asyncio.create_subprocess_exec`
-  - [ ] 1.2 Return structured dict: `{passed, exit_code, stdout, stderr, command_used, files_linted}`
-  - [ ] 1.3 Implement 60s timeout using `asyncio.timeout()` / `asyncio.wait_for()`, kill subprocess on timeout
-  - [ ] 1.4 Update `src/sohnbot/capabilities/command_profiles/__init__.py` to export `execute_lint_profile`
+- [x] Task 1: Create `execute_lint_profile` capability function (AC: 1, 2, 3)
+  - [x] 1.1 Create `src/sohnbot/capabilities/command_profiles/profile_executor.py` with `execute_lint_profile(repo_path, files, command, timeout_seconds)` using `asyncio.create_subprocess_exec`
+  - [x] 1.2 Return structured dict: `{passed, exit_code, stdout, stderr, command_used, files_linted}`
+  - [x] 1.3 Implement 60s timeout using `asyncio.timeout()` / `asyncio.wait_for()`, kill subprocess on timeout
+  - [x] 1.4 Update `src/sohnbot/capabilities/command_profiles/__init__.py` to export `execute_lint_profile`
 
-- [ ] Task 2: Add config keys for lint command (AC: 1)
-  - [ ] 2.1 Add `commands.lint_command` (dynamic, str, default `"pylint"`) to `src/sohnbot/config/registry.py`
-  - [ ] 2.2 Add `lint_command = "pylint"` under `[commands]` section in `config/default.toml`
+- [x] Task 2: Add config keys for lint command (AC: 1)
+  - [x] 2.1 Add `commands.lint_command` (dynamic, str, default `"pylint"`) to `src/sohnbot/config/registry.py`
+  - [x] 2.2 Add `lint_command = "pylint"` under `[commands]` section in `config/default.toml`
 
-- [ ] Task 3: Wire profiles capability into the Broker Router (AC: 4, 5)
-  - [ ] 3.1 Import `execute_lint_profile` in `src/sohnbot/broker/router.py`
-  - [ ] 3.2 Add `profiles` capability block in `_execute_capability()` for action `"lint"`
-  - [ ] 3.3 Pull `commands.lint_command` and `commands.lint_timeout_seconds` from `config_manager.get()`
-  - [ ] 3.4 Update `_format_notification_message()` to produce a human-readable lint summary
+- [x] Task 3: Wire profiles capability into the Broker Router (AC: 4, 5)
+  - [x] 3.1 Import `execute_lint_profile` in `src/sohnbot/broker/router.py`
+  - [x] 3.2 Add `profiles` capability block in `_execute_capability()` for action `"lint"`
+  - [x] 3.3 Pull `commands.lint_command` and `commands.lint_timeout_seconds` from `config_manager.get()`
+  - [x] 3.4 Update `_format_notification_message()` to produce a human-readable lint summary
 
-- [ ] Task 4: Implement `profiles__lint` MCP tool (AC: 1, 6)
-  - [ ] 4.1 Add `@tool("profiles__lint", ...)` in `src/sohnbot/runtime/mcp_tools.py`
-  - [ ] 4.2 Accept params: `repo_path: str`, `files: list` (optional, empty = full project)
-  - [ ] 4.3 Route through `broker.route_operation(capability="profiles", action="lint", params=...)`
-  - [ ] 4.4 Register `profiles__lint` in the `tools=[...]` list at the bottom of `create_sohnbot_mcp_server()`
+- [x] Task 4: Implement `profiles__lint` MCP tool (AC: 1, 6)
+  - [x] 4.1 Add `@tool("profiles__lint", ...)` in `src/sohnbot/runtime/mcp_tools.py`
+  - [x] 4.2 Accept params: `repo_path: str`, `files: list` (optional, empty = full project)
+  - [x] 4.3 Route through `broker.route_operation(capability="profiles", action="lint", params=...)`
+  - [x] 4.4 Register `profiles__lint` in the `tools=[...]` list at the bottom of `create_sohnbot_mcp_server()`
 
-- [ ] Task 5: Tests (AC: 1, 2, 3, 4)
-  - [ ] 5.1 Create `tests/unit/test_profile_executor.py` — unit test `execute_lint_profile` with mocked subprocess (success, failure, timeout)
-  - [ ] 5.2 Add `profiles__lint` coverage in `tests/unit/test_mcp_tools.py` (mock broker, verify tool schema and routing)
-  - [ ] 5.3 Add broker Tier 0 classification test for `("profiles", "lint")` in `tests/unit/test_broker.py`
+- [x] Task 5: Tests (AC: 1, 2, 3, 4)
+  - [x] 5.1 Create `tests/unit/test_profile_executor.py` — unit test `execute_lint_profile` with mocked subprocess (success, failure, timeout)
+  - [x] 5.2 Add `profiles__lint` coverage in `tests/unit/test_mcp_tools.py` (mock broker, verify tool schema and routing)
+  - [x] 5.3 Add broker Tier 0 classification test for `("profiles", "lint")` in `tests/unit/test_broker.py` (pre-existing, confirmed passing)
 
 ## Dev Notes
 
@@ -278,4 +278,22 @@ claude-sonnet-4-6
 
 ### Completion Notes List
 
+- Implemented `execute_lint_profile` using `asyncio.create_subprocess_exec` (not `shell=True`) with `asyncio.timeout()` for hard kill on timeout
+- `commands.lint_command` (dynamic, default "pylint") added to registry and default.toml
+- Broker router wired: profiles/lint scope validation + `_execute_capability` block + `_format_notification_message` entry
+- `profiles__lint` MCP tool registered via `@tool` decorator with `repo_path: str, files: list` schema
+- 7 new unit tests in `test_profile_executor.py`; 3 new tests added to `test_mcp_tools.py`
+- `classify_tier("profiles", "lint", 0) == 0` was already in `test_broker.py` (confirmed passing)
+- Pre-existing failing test `test_config_manager.py::test_static_config_validation` (regex mismatch) confirmed pre-existing, NOT introduced by this story
+
 ### File List
+
+- `src/sohnbot/capabilities/command_profiles/profile_executor.py` (created)
+- `src/sohnbot/capabilities/command_profiles/__init__.py` (modified — exports execute_lint_profile)
+- `src/sohnbot/broker/router.py` (modified — profiles validation block, _execute_capability profiles/lint, _format_notification_message profiles/lint)
+- `src/sohnbot/runtime/mcp_tools.py` (modified — profiles__lint tool + registered in tools list)
+- `src/sohnbot/config/registry.py` (modified — commands.lint_command added)
+- `config/default.toml` (modified — lint_command = "pylint" under [commands])
+- `tests/unit/test_profile_executor.py` (created — 7 unit tests)
+- `tests/unit/test_mcp_tools.py` (modified — 3 new profiles__lint tests, profiles__lint added to allowed tools list)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified — story status updates)

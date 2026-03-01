@@ -192,6 +192,11 @@ REGISTRY: dict[str, ConfigKey] = {
     ),
 
     # ===== COMMAND PROFILES (Dynamic - Timeout tuning) =====
+    "commands.lint_command": ConfigKey(
+        tier="dynamic",
+        value_type=str,
+        default="pylint",
+    ),
     "commands.lint_timeout_seconds": ConfigKey(
         tier="dynamic",
         value_type=int,

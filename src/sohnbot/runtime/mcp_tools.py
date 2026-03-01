@@ -593,6 +593,41 @@ def create_sohnbot_mcp_server(broker, config):
         job = (result.result or {}).get("job") or {}
         return _as_mcp_text(f"✅ Job updated: {_format_scheduler_job(job)}")
 
+    # Command profiles (Epic 5)
+    @tool("profiles__lint", "Run project linter on repo", {"repo_path": str, "files": list})
+    async def profiles_lint(args):
+        """Run lint profile via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        repo_path = args.get("repo_path")
+        files = args.get("files") or []
+        logger.info(
+            "mcp_tool_invoked",
+            tool="profiles__lint",
+            repo_path=repo_path,
+            chat_id=chat_id,
+        )
+
+        result = await broker.route_operation(
+            capability="profiles",
+            action="lint",
+            params={"repo_path": repo_path, "files": files},
+            chat_id=chat_id,
+        )
+
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="profiles__lint", error=error_msg)
+            return _as_mcp_text(f"❌ Lint denied: {error_msg}")
+
+        data = result.result or {}
+        status = "✅ PASSED" if data.get("passed") else "❌ FAILED"
+        exit_code = data.get("exit_code", "?")
+        stdout = data.get("stdout", "")
+        stderr = data.get("stderr", "")
+        output = stdout or stderr
+        return _as_mcp_text(f"{status} (exit {exit_code})\n{output[:2000]}")
+
     @tool("observe__status", "Get current system status snapshot", {})
     async def observe_status(args):
         """Read latest status snapshot from in-memory observability cache."""
@@ -698,6 +733,7 @@ def create_sohnbot_mcp_server(broker, config):
             sched_enable,
             sched_delete,
             sched_edit,
+            profiles_lint,
             observe_status,
             observe_resources,
             observe_health,

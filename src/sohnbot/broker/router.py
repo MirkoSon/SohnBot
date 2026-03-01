@@ -405,6 +405,55 @@ class BrokerRouter:
                         },
                     )
 
+        # Profiles capability parameter validation and scope checking
+        if capability == "profiles":
+            if action == "lint" and "repo_path" not in params:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing required parameter: repo_path",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+
+            repo_path = params.get("repo_path")
+            if repo_path:
+                is_valid, error_msg = self.scope_validator.validate_path(repo_path)
+                if not is_valid:
+                    normalized_path = self.scope_validator.get_normalized_path(repo_path)
+                    allowed_roots = self.scope_validator.get_allowed_roots()
+                    logger.warning(
+                        "scope_violation_blocked",
+                        operation_id=operation_id,
+                        chat_id=chat_id,
+                        capability=capability,
+                        action=action,
+                        attempted_path=str(repo_path),
+                        normalized_path=normalized_path,
+                        allowed_roots=allowed_roots,
+                    )
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "scope_violation",
+                            "message": error_msg,
+                            "details": {
+                                "path": str(repo_path),
+                                "normalized_path": normalized_path,
+                                "allowed_roots": allowed_roots,
+                            },
+                            "retryable": False,
+                        },
+                    )
+
         # 4. Check limits (e.g., max command profiles per request)
         # TODO: Implement limit checking (Story 1.5+)
 
@@ -793,6 +842,26 @@ class BrokerRouter:
                 job = await edit_job(job_id=job_id, updates=params["updates"])
                 return {"updated": job is not None, "job_id": job_id, "job": job}
 
+        if capability == "profiles":
+            if action == "lint":
+                from ..capabilities.command_profiles import execute_lint_profile
+                command = (
+                    self.config_manager.get("commands.lint_command")
+                    if self.config_manager
+                    else "pylint"
+                )
+                timeout = (
+                    self.config_manager.get("commands.lint_timeout_seconds")
+                    if self.config_manager
+                    else 60
+                )
+                return await execute_lint_profile(
+                    repo_path=params["repo_path"],
+                    command=command,
+                    files=params.get("files") or [],
+                    timeout_seconds=int(timeout),
+                )
+
         return await self._execute_capability_placeholder(capability, action, params, operation_id)
 
     def _format_notification_message(
@@ -804,6 +873,13 @@ class BrokerRouter:
         snapshot_ref: Optional[str],
         result: Optional[Dict[str, Any]] = None,
     ) -> str:
+        if capability == "profiles" and action == "lint" and status == "completed":
+            data = result or {}
+            passed = "✅ PASSED" if data.get("passed") else "❌ FAILED"
+            exit_code = data.get("exit_code", "?")
+            repo = params.get("repo_path", "-")
+            return f"{passed} Lint profile | exit_code={exit_code} | repo={repo}"
+
         if capability == "git" and action == "commit" and status == "completed":
             data = result or {}
             commit_hash = data.get("commit_hash")
