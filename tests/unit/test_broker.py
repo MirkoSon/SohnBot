@@ -586,3 +586,165 @@ def test_format_notification_build_failed(tmp_path):
     )
     assert "❌ FAILED" in msg
     assert "exit_code=2" in msg
+
+
+# ─── profiles/test broker tests ──────────────────────────────────────────────
+
+def test_classify_tier_profiles_test_is_tier_0():
+    """profiles/test must be classified as Tier 0 (read-only execution)."""
+    assert classify_tier("profiles", "test", 0) == 0
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_test_missing_repo_path_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    """profiles/test without repo_path → allowed=False, code=invalid_request."""
+    validator = ScopeValidator([str(tmp_path)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="test",
+        params={"pattern": "tests/unit/"},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_test_empty_repo_path_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    """profiles/test with repo_path='' → allowed=False, code=invalid_request."""
+    validator = ScopeValidator([str(tmp_path)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="test",
+        params={"repo_path": "", "pattern": ""},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "empty" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_test_out_of_scope_repo_path_returns_scope_violation(mock_log_end, mock_log_start, tmp_path):
+    """profiles/test with repo_path outside scope → allowed=False, code=scope_violation."""
+    allowed_root = tmp_path / "allowed"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="test",
+        params={"repo_path": "/outside/path", "pattern": ""},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "scope_violation"
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_test_unsafe_pattern_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    """profiles/test with shell metacharacters in pattern → allowed=False, code=invalid_request."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="test",
+        params={"repo_path": str(allowed_root), "pattern": "tests/; rm -rf /"},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "disallowed" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_test_success_routes_to_capability(mock_log_end, mock_log_start, tmp_path):
+    """profiles/test with valid params routes to execute_test_profile and returns result."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    repo_path = str(allowed_root)
+
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    fake_test_result = {
+        "passed": True,
+        "exit_code": 0,
+        "stdout": "5 passed.",
+        "stderr": "",
+        "command_used": "pytest",
+        "pattern": "tests/unit/",
+    }
+
+    with patch(
+        "src.sohnbot.capabilities.command_profiles.execute_test_profile",
+        new=AsyncMock(return_value=fake_test_result),
+    ):
+        result = await router.route_operation(
+            capability="profiles",
+            action="test",
+            params={"repo_path": repo_path, "pattern": "tests/unit/"},
+            chat_id="test_chat",
+        )
+
+    assert result.allowed is True
+    assert result.result["passed"] is True
+    assert result.result["exit_code"] == 0
+    assert result.snapshot_ref is None  # Tier 0 — no snapshot
+
+
+# ─── profiles/test notification formatter tests ───────────────────────────────
+
+def test_format_notification_test_passed(tmp_path):
+    """_format_notification_message returns PASSED string with exit_code and repo."""
+    router = BrokerRouter(ScopeValidator([str(tmp_path)]))
+    msg = router._format_notification_message(
+        capability="profiles",
+        action="test",
+        params={"repo_path": "/some/project"},
+        status="completed",
+        snapshot_ref=None,
+        result={"passed": True, "exit_code": 0},
+    )
+    assert "✅ PASSED" in msg
+    assert "Test profile" in msg
+    assert "exit_code=0" in msg
+    assert "/some/project" in msg
+
+
+def test_format_notification_test_failed(tmp_path):
+    """_format_notification_message returns FAILED string with non-zero exit_code."""
+    router = BrokerRouter(ScopeValidator([str(tmp_path)]))
+    msg = router._format_notification_message(
+        capability="profiles",
+        action="test",
+        params={"repo_path": "/some/project"},
+        status="completed",
+        snapshot_ref=None,
+        result={"passed": False, "exit_code": 1},
+    )
+    assert "❌ FAILED" in msg
+    assert "Test profile" in msg
+    assert "exit_code=1" in msg

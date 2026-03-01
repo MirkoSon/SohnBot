@@ -80,7 +80,7 @@ development_status:
   epic-5: in-progress
   5-1-lint-project-profile: review
   5-2-build-project-profile: done
-  5-3-run-tests-profile: ready-for-dev
+  5-3-run-tests-profile: review
   5-4-ripgrep-search-profile: backlog
   5-5-profile-chaining-limit-dry-run-mode: backlog
   epic-5-retrospective: optional

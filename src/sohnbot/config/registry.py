@@ -50,6 +50,18 @@ def _validate_build_command(value: str) -> bool:
     return True
 
 
+def _validate_test_command(value: str) -> bool:
+    """Reject empty strings and shell metacharacters in test command."""
+    if not value or not value.strip():
+        raise ValueError("test_command must not be empty")
+    if not _SAFE_COMMAND_RE.match(value):
+        raise ValueError(
+            "test_command contains disallowed characters; "
+            "use alphanumeric, spaces, dashes, underscores, dots, and slashes only"
+        )
+    return True
+
+
 @dataclass
 class ConfigKey:
     """Defines a single configuration key with validation and tier classification.
@@ -232,6 +244,12 @@ REGISTRY: dict[str, ConfigKey] = {
         value_type=str,
         default="make",
         validator=_validate_build_command,
+    ),
+    "commands.test_command": ConfigKey(
+        tier="dynamic",
+        value_type=str,
+        default="pytest",
+        validator=_validate_test_command,
     ),
     "commands.lint_timeout_seconds": ConfigKey(
         tier="dynamic",

@@ -1,6 +1,6 @@
 # Story 5.3: Run Tests Profile
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -37,48 +37,48 @@ so that I can verify tests pass before committing.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `execute_test_profile` to capability module (AC: 1, 2)
-  - [ ] 1.1 Add `execute_test_profile(repo_path, command, pattern, timeout_seconds)` to `src/sohnbot/capabilities/command_profiles/profile_executor.py` — follow the same `asyncio.create_subprocess_exec` pattern as `execute_build_profile`, but accept `pattern: str` instead of `target: str`, and default timeout of 600s
-  - [ ] 1.2 Return structured dict: `{passed, exit_code, stdout, stderr, command_used, pattern}`
-  - [ ] 1.3 Implement 600s timeout using `asyncio.timeout()`, kill + `await proc.wait()` on timeout (prevent zombie processes — Story 5.1 H1 fix)
-  - [ ] 1.4 Add `asyncio.CancelledError` handler with `asyncio.shield(proc.wait())` (Story 5.2 review fix)
-  - [ ] 1.5 Export `execute_test_profile` from `src/sohnbot/capabilities/command_profiles/__init__.py`
+- [x] Task 1: Add `execute_test_profile` to capability module (AC: 1, 2)
+  - [x] 1.1 Add `execute_test_profile(repo_path, command, pattern, timeout_seconds)` to `src/sohnbot/capabilities/command_profiles/profile_executor.py` — follow the same `asyncio.create_subprocess_exec` pattern as `execute_build_profile`, but accept `pattern: str` instead of `target: str`, and default timeout of 600s
+  - [x] 1.2 Return structured dict: `{passed, exit_code, stdout, stderr, command_used, pattern}`
+  - [x] 1.3 Implement 600s timeout using `asyncio.timeout()`, kill + `await proc.wait()` on timeout (prevent zombie processes — Story 5.1 H1 fix)
+  - [x] 1.4 Add `asyncio.CancelledError` handler with `asyncio.shield(proc.wait())` (Story 5.2 review fix)
+  - [x] 1.5 Export `execute_test_profile` from `src/sohnbot/capabilities/command_profiles/__init__.py`
 
-- [ ] Task 2: Add config key for test command (AC: 1)
-  - [ ] 2.1 Add `_validate_test_command(value: str) -> bool` validator function to `src/sohnbot/config/registry.py` — same metacharacter rejection logic as `_validate_build_command` (reuse `_SAFE_COMMAND_RE`)
-  - [ ] 2.2 Add `"commands.test_command"` ConfigKey to `REGISTRY` in `src/sohnbot/config/registry.py` (dynamic, str, default `"pytest"`, validator=`_validate_test_command`) — add after `"commands.build_command"` entry (~line 235)
-  - [ ] 2.3 Add `test_command = "pytest"` under `[commands]` section in `config/default.toml` (after `build_command`, before `lint_timeout_seconds`) — NOTE: `test_timeout_seconds = 600` is **already present** in default.toml, do NOT add it again
+- [x] Task 2: Add config key for test command (AC: 1)
+  - [x] 2.1 Add `_validate_test_command(value: str) -> bool` validator function to `src/sohnbot/config/registry.py` — same metacharacter rejection logic as `_validate_build_command` (reuse `_SAFE_COMMAND_RE`)
+  - [x] 2.2 Add `"commands.test_command"` ConfigKey to `REGISTRY` in `src/sohnbot/config/registry.py` (dynamic, str, default `"pytest"`, validator=`_validate_test_command`) — add after `"commands.build_command"` entry (~line 235)
+  - [x] 2.3 Add `test_command = "pytest"` under `[commands]` section in `config/default.toml` (after `build_command`, before `lint_timeout_seconds`) — NOTE: `test_timeout_seconds = 600` is **already present** in default.toml, do NOT add it again
 
-- [ ] Task 3: Add `("profiles", "test")` to Tier 0 in operation classifier (AC: 3)
-  - [ ] 3.1 Add `("profiles", "test"),  # Read-only execution` to `READ_ONLY_ACTIONS` set in `src/sohnbot/broker/operation_classifier.py` (after `("profiles", "build")` at line 35)
+- [x] Task 3: Add `("profiles", "test")` to Tier 0 in operation classifier (AC: 3)
+  - [x] 3.1 Add `("profiles", "test"),  # Read-only execution` to `READ_ONLY_ACTIONS` set in `src/sohnbot/broker/operation_classifier.py` (after `("profiles", "build")` at line 35)
 
-- [ ] Task 4: Extend profiles validation in Broker Router (AC: 5, 6)
-  - [ ] 4.1 In `src/sohnbot/broker/router.py`, extend the validation check at line 411: change `if action in {"lint", "build"} and "repo_path" not in params:` to `if action in {"lint", "build", "test"} and "repo_path" not in params:`
-  - [ ] 4.2 After the existing `target` validation block (~line 502), add a `pattern` validation block: if `params.get("pattern")` is not None/empty, validate it with `_SAFE_PROFILE_RE` (already imported as alias at line 36); reject with `invalid_request` if unsafe characters detected
+- [x] Task 4: Extend profiles validation in Broker Router (AC: 5, 6)
+  - [x] 4.1 In `src/sohnbot/broker/router.py`, extend the validation check at line 411: change `if action in {"lint", "build"} and "repo_path" not in params:` to `if action in {"lint", "build", "test"} and "repo_path" not in params:`
+  - [x] 4.2 After the existing `target` validation block (~line 502), add a `pattern` validation block: if `params.get("pattern")` is not None/empty, validate it with `_SAFE_PROFILE_RE` (already imported as alias at line 36); reject with `invalid_request` if unsafe characters detected
 
-- [ ] Task 5: Wire `profiles/test` into Broker `_execute_capability` (AC: 1, 2, 3)
-  - [ ] 5.1 In `src/sohnbot/broker/router.py`, inside the `if capability == "profiles":` block in `_execute_capability()` (~line 892), add an `if action == "test":` branch after the existing `if action == "build":` branch
-  - [ ] 5.2 Import `execute_test_profile` from `..capabilities.command_profiles` (lazy import inside the if-block)
-  - [ ] 5.3 Pull `commands.test_command` and `commands.test_timeout_seconds` from `config_manager.get()` (with `"pytest"` and `600` as fallbacks)
-  - [ ] 5.4 Call `execute_test_profile(repo_path=..., command=..., pattern=..., timeout_seconds=int(timeout))`
+- [x] Task 5: Wire `profiles/test` into Broker `_execute_capability` (AC: 1, 2, 3)
+  - [x] 5.1 In `src/sohnbot/broker/router.py`, inside the `if capability == "profiles":` block in `_execute_capability()` (~line 892), add an `if action == "test":` branch after the existing `if action == "build":` branch
+  - [x] 5.2 Import `execute_test_profile` from `..capabilities.command_profiles` (lazy import inside the if-block)
+  - [x] 5.3 Pull `commands.test_command` and `commands.test_timeout_seconds` from `config_manager.get()` (with `"pytest"` and `600` as fallbacks)
+  - [x] 5.4 Call `execute_test_profile(repo_path=..., command=..., pattern=..., timeout_seconds=int(timeout))`
 
-- [ ] Task 6: Extend notification formatter for test profile (AC: 4)
-  - [ ] 6.1 In `src/sohnbot/broker/router.py`, add `elif capability == "profiles" and action == "test" and status == "completed":` case in `_format_notification_message()` (immediately after the existing build case at ~line 953)
-  - [ ] 6.2 Format: `"✅ PASSED Test profile | exit_code=0 | repo=..."` or `"❌ FAILED Test profile | exit_code=1 | repo=..."`
+- [x] Task 6: Extend notification formatter for test profile (AC: 4)
+  - [x] 6.1 In `src/sohnbot/broker/router.py`, add `elif capability == "profiles" and action == "test" and status == "completed":` case in `_format_notification_message()` (immediately after the existing build case at ~line 953)
+  - [x] 6.2 Format: `"✅ PASSED Test profile | exit_code=0 | repo=..."` or `"❌ FAILED Test profile | exit_code=1 | repo=..."`
 
-- [ ] Task 7: Implement `profiles__test` MCP tool (AC: 1, 5)
-  - [ ] 7.1 Add `@tool("profiles__test", "Run project test suite", {"repo_path": str, "pattern": str})` in `src/sohnbot/runtime/mcp_tools.py` immediately after the `profiles__build` tool definition (~line 664)
-  - [ ] 7.2 Accept params: `repo_path: str`, `pattern: str` (optional, empty = run full test suite)
-  - [ ] 7.3 Route through `broker.route_operation(capability="profiles", action="test", params=..., chat_id=chat_id)`
-  - [ ] 7.4 On success: return `"{status} (exit {exit_code})\n{stdout+stderr combined, truncated to 2000 chars}"` — same combined output pattern as `profiles__build`
-  - [ ] 7.5 Register `profiles_test` in the `tools=[...]` list immediately after `profiles_build` (~line 771)
+- [x] Task 7: Implement `profiles__test` MCP tool (AC: 1, 5)
+  - [x] 7.1 Add `@tool("profiles__test", "Run project test suite", {"repo_path": str, "pattern": str})` in `src/sohnbot/runtime/mcp_tools.py` immediately after the `profiles__build` tool definition (~line 664)
+  - [x] 7.2 Accept params: `repo_path: str`, `pattern: str` (optional, empty = run full test suite)
+  - [x] 7.3 Route through `broker.route_operation(capability="profiles", action="test", params=..., chat_id=chat_id)`
+  - [x] 7.4 On success: return `"{status} (exit {exit_code})\n{stdout+stderr combined, truncated to 2000 chars}"` — same combined output pattern as `profiles__build`
+  - [x] 7.5 Register `profiles_test` in the `tools=[...]` list immediately after `profiles_build` (~line 771)
 
-- [ ] Task 8: Tests (AC: 1, 2, 3, 4, 5, 6)
-  - [ ] 8.1 Add `TestExecuteTestProfile` class in `tests/unit/test_profile_executor.py` — success, failure, timeout (assert `await proc.wait()` called on timeout), optional pattern included in command, cancellation kills process
-  - [ ] 8.2 Add `profiles__test` tests in `tests/unit/test_mcp_tools.py` — mock broker, verify tool schema and routing, test with and without pattern; add `mcp__sohnbot__profiles__test` to allowed tools list
-  - [ ] 8.3 Add broker tests in `tests/unit/test_broker.py` — missing repo_path, empty repo_path, out-of-scope repo_path, unsafe pattern, and success routing for `("profiles", "test")`
-  - [ ] 8.4 Add `classify_tier("profiles", "test", 0) == 0` test in `tests/unit/test_broker.py`
-  - [ ] 8.5 Add `_format_notification_message` tests for test/passed and test/failed cases in `tests/unit/test_broker.py`
+- [x] Task 8: Tests (AC: 1, 2, 3, 4, 5, 6)
+  - [x] 8.1 Add `TestExecuteTestProfile` class in `tests/unit/test_profile_executor.py` — success, failure, timeout (assert `await proc.wait()` called on timeout), optional pattern included in command, cancellation kills process
+  - [x] 8.2 Add `profiles__test` tests in `tests/unit/test_mcp_tools.py` — mock broker, verify tool schema and routing, test with and without pattern; add `mcp__sohnbot__profiles__test` to allowed tools list
+  - [x] 8.3 Add broker tests in `tests/unit/test_broker.py` — missing repo_path, empty repo_path, out-of-scope repo_path, unsafe pattern, and success routing for `("profiles", "test")`
+  - [x] 8.4 Add `classify_tier("profiles", "test", 0) == 0` test in `tests/unit/test_broker.py`
+  - [x] 8.5 Add `_format_notification_message` tests for test/passed and test/failed cases in `tests/unit/test_broker.py`
 
 ## Dev Notes
 
@@ -438,10 +438,37 @@ Story 5.2 was implemented then had code review fixes applied. All patterns are n
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+claude-sonnet-4-6
 
 ### Debug Log References
 
 ### Completion Notes List
 
 ### File List
+### Completion Notes List
+
+- Implemented `execute_test_profile` in `profile_executor.py` following the exact same pattern as `execute_build_profile`. Uses `asyncio.create_subprocess_exec` (no shell injection risk), `asyncio.timeout()` for 600s hard kill, zombie-process prevention via `await proc.wait()` after `proc.kill()`, and `asyncio.CancelledError` handler with `asyncio.shield(proc.wait())`.
+- Added `_validate_test_command` security validator and `"commands.test_command"` ConfigKey to registry. `test_timeout_seconds` was already present — not duplicated.
+- Added `test_command = "pytest"` to `config/default.toml` under `[commands]`. `test_timeout_seconds = 600` was already present.
+- Added `("profiles", "test")` to `READ_ONLY_ACTIONS` in `operation_classifier.py` — ensures Tier 0 classification (no snapshot created).
+- Extended broker router: `action in {"lint", "build", "test"}` for missing repo_path check; added `pattern` metacharacter validation block after `target` block.
+- Added `if action == "test":` branch in `_execute_capability` with lazy import of `execute_test_profile` and config fallbacks.
+- Added test profile notification formatter case in `_format_notification_message`.
+- Added `profiles__test` MCP tool in `mcp_tools.py` with combined stdout+stderr output (2000 char truncation), registered in tools list.
+- Added 18 new tests: 7 in `TestExecuteTestProfile` (success, failure, timeout, no-pattern, with-pattern, cwd, cancellation), 3 MCP tool tests (schema, routing, denial), 8 broker tests (tier classification, 5 validation, 2 notification formatter). All 76 tests in the 3 affected test files pass.
+- Pre-existing failures confirmed NOT introduced by this story: `test_config_manager.py::test_static_config_validation` (regex mismatch) and `test_health_checks.py::test_check_sqlite_writable_warns_if_not_wal` (sqlite WAL transaction issue).
+
+### File List
+
+- `src/sohnbot/capabilities/command_profiles/profile_executor.py` (modified — added `execute_test_profile`)
+- `src/sohnbot/capabilities/command_profiles/__init__.py` (modified — exported `execute_test_profile`)
+- `src/sohnbot/broker/operation_classifier.py` (modified — added `("profiles", "test")` to READ_ONLY_ACTIONS)
+- `src/sohnbot/broker/router.py` (modified — validation, _execute_capability, _format_notification_message)
+- `src/sohnbot/runtime/mcp_tools.py` (modified — added `profiles__test` tool + registered in tools list)
+- `src/sohnbot/config/registry.py` (modified — added `_validate_test_command` + `"commands.test_command"` ConfigKey)
+- `config/default.toml` (modified — added `test_command = "pytest"`)
+- `tests/unit/test_profile_executor.py` (modified — added `TestExecuteTestProfile` class, 7 tests)
+- `tests/unit/test_mcp_tools.py` (modified — added 3 `profiles__test` tests + `mcp__sohnbot__profiles__test` to allowed list)
+- `tests/unit/test_broker.py` (modified — added 8 tests: tier, 5 validation, 2 notification formatter)
+- `_bmad-output/implementation-artifacts/5-3-run-tests-profile.md` (this story file)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (updated status)

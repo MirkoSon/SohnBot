@@ -224,6 +224,78 @@ class TestMCPTools:
         assert "❌ Build denied" in content
         assert "scope_violation" in content
 
+    def test_profiles_test_tool_registered_with_expected_schema(self, mock_broker, mock_config):
+        """profiles__test tool is registered with correct schema."""
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+
+        assert "profiles__test" in by_name
+        assert by_name["profiles__test"].input_schema == {"repo_path": str, "pattern": str}
+
+    @pytest.mark.asyncio
+    async def test_profiles_test_routes_through_broker(self, mock_broker, mock_config):
+        """profiles__test invokes broker.route_operation with correct capability/action."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=True,
+            error=None,
+            result={"passed": True, "exit_code": 0, "stdout": "5 passed.", "stderr": "", "command_used": "pytest", "pattern": "tests/unit/"},
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        test_tool = by_name["profiles__test"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await test_tool.handler({"repo_path": "/some/project", "pattern": "tests/unit/"})
+
+        mock_broker.route_operation.assert_called_once_with(
+            capability="profiles",
+            action="test",
+            params={"repo_path": "/some/project", "pattern": "tests/unit/"},
+            chat_id="test_chat",
+        )
+        content = result["content"][0]["text"]
+        assert "✅ PASSED" in content
+        assert "(exit 0)" in content
+
+    @pytest.mark.asyncio
+    async def test_profiles_test_denied_returns_error_message(self, mock_broker, mock_config):
+        """profiles__test denied by broker returns error text."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=False,
+            error={"message": "scope_violation: path outside roots"},
+            result=None,
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        test_tool = by_name["profiles__test"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await test_tool.handler({"repo_path": "/bad/path", "pattern": ""})
+
+        content = result["content"][0]["text"]
+        assert "❌ Test denied" in content
+        assert "scope_violation" in content
+
 
 class TestPreToolUseHook:
     """Test PreToolUse hook validation."""
@@ -306,6 +378,7 @@ class TestPreToolUseHook:
             "mcp__sohnbot__observe__health",
             "mcp__sohnbot__profiles__lint",
             "mcp__sohnbot__profiles__build",
+            "mcp__sohnbot__profiles__test",
         ]
 
         for tool_name in tool_names:
