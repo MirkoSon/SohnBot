@@ -30,6 +30,7 @@ def classify_tier(capability: str, action: str, file_count: int) -> int:
         ("observe", "status"),
         ("observe", "resources"),
         ("observe", "health"),
+        ("observe", "logs"),
         ("web", "search"),
         ("profiles", "lint"),   # Read-only execution
         ("profiles", "build"),  # Read-only execution

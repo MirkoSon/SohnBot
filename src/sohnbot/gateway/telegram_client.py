@@ -11,6 +11,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from .commands import (
     handle_heartbeat_command,
     handle_health_command,
+    handle_logs_command,
     handle_notify_command,
     handle_schedule_command,
     handle_status_command,
@@ -68,6 +69,7 @@ class TelegramClient:
         self.application.add_handler(CommandHandler("notify", self.cmd_notify))
         self.application.add_handler(CommandHandler("status", self.cmd_status))
         self.application.add_handler(CommandHandler("health", self.cmd_health))
+        self.application.add_handler(CommandHandler("logs", self.cmd_logs))
         self.application.add_handler(CommandHandler("schedule", self.cmd_schedule))
         self.application.add_handler(CommandHandler("heartbeat", self.cmd_heartbeat))
         self.application.add_handler(CommandHandler("dryrun", self.cmd_dryrun))
@@ -241,6 +243,37 @@ class TelegramClient:
             return
 
         response = await handle_health_command(str(chat_id))
+        await update.message.reply_text(response)
+
+    async def cmd_logs(self, update: Update, context):
+        """Handle /logs [hours] command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_logs_command", chat_id=chat_id)
+            return
+
+        db_path = "data/sohnbot.db"
+        agent_session = getattr(self.message_router, "agent_session", None)
+        config = getattr(agent_session, "config", None)
+        if config is not None:
+            try:
+                db_path = str(config.get("database.path"))
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning("logs_command_db_path_config_invalid", error=str(exc))
+                db_path = "data/sohnbot.db"
+            except RuntimeError as exc:
+                logger.warning("logs_command_db_path_config_error", error=str(exc))
+                db_path = "data/sohnbot.db"
+
+        response = await handle_logs_command(
+            str(chat_id),
+            update.message.text or "",
+            db_path,
+        )
         await update.message.reply_text(response)
 
     async def cmd_schedule(self, update: Update, context):

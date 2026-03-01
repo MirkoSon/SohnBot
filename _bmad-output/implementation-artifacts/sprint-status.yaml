@@ -85,9 +85,9 @@ development_status:
   5-5-profile-chaining-limit-dry-run-mode: done
   epic-5-retrospective: done
 
-  epic-6: backlog
-  6-1-brave-web-search-integration: backlog
-  6-2-search-result-caching: backlog
-  6-3-search-volume-monitoring: backlog
-  6-4-query-operation-logs: backlog
-  epic-6-retrospective: optional
+  epic-6: done
+  6-1-brave-web-search-integration: done
+  6-2-search-result-caching: done
+  6-3-search-volume-monitoring: done
+  6-4-query-operation-logs: done
+  epic-6-retrospective: done

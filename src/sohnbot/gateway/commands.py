@@ -21,6 +21,7 @@ from ..persistence.notification import (
     get_notifications_enabled,
     set_notifications_enabled,
 )
+from ..persistence.operation_logs import query_operation_logs
 
 _schedule_broker: Any = None
 
@@ -189,6 +190,72 @@ async def handle_health_command(chat_id: str) -> str:
             detail_text = ", ".join(f"{k}={v}" for k, v in details.items())
             line = f"{line} ({detail_text})"
         lines.append(line)
+
+    return "\n".join(lines)
+
+
+async def handle_logs_command(chat_id: str, command_text: str, db_path: str) -> str:
+    """Handle /logs [hours] command."""
+    _ = chat_id  # Reserved for future chat-specific filtering options.
+    parts = command_text.strip().split()
+    hours = 24
+
+    if len(parts) > 1:
+        try:
+            hours = int(parts[1])
+        except ValueError:
+            return "Usage: /logs [hours]\nHours must be a number."
+
+    if hours < 1 or hours > 720:
+        return "Usage: /logs [hours]\nHours must be between 1 and 720 (30 days)."
+
+    try:
+        logs = await query_operation_logs(db_path=db_path, hours=hours, limit=1000)
+    except (RuntimeError, ValueError) as exc:
+        return f"Error querying logs: {exc}"
+
+    if not logs:
+        return f"No operations found in last {hours} hours."
+
+    max_rows = 50
+    lines = [f"📋 Operation Logs (last {hours}h) — {len(logs)} operations", ""]
+    status_emoji = {
+        "completed": "✅",
+        "failed": "❌",
+        "in_progress": "⏳",
+        "postponed": "⏸️",
+        "cancelled": "🚫",
+    }
+
+    for entry in logs[:max_rows]:
+        op_type = f"{entry.get('capability', '?')}__{entry.get('action', '?')}"
+        status = str(entry.get("status", "unknown"))
+        timestamp_iso = str(entry.get("timestamp_iso", "unknown-time"))
+        duration = entry.get("duration_ms")
+        duration_text = f"{int(duration)}ms" if isinstance(duration, int) else "N/A"
+        prefix = status_emoji.get(status, "❔")
+
+        line = f"{prefix} {timestamp_iso} | {op_type} | {status} | {duration_text}"
+
+        file_paths = entry.get("file_paths") or []
+        if file_paths:
+            preview = ", ".join(str(path) for path in file_paths[:3])
+            more = len(file_paths) - 3
+            if more > 0:
+                preview = f"{preview} (+{more} more)"
+            line = f"{line}\n  Files: {preview}"
+
+        if status == "failed":
+            error_details = entry.get("error_details") or {}
+            if isinstance(error_details, dict) and error_details:
+                error_message = str(error_details.get("message", "Unknown error"))
+                line = f"{line}\n  Error: {error_message[:120]}"
+
+        lines.append(line)
+
+    if len(logs) > max_rows:
+        lines.append("")
+        lines.append(f"... and {len(logs) - max_rows} more operations")
 
     return "\n".join(lines)
 

@@ -257,6 +257,114 @@ class TestMCPTools:
             "timeout_seconds": int,
         }
 
+    def test_web_search_tool_registered_with_expected_schema(self, mock_broker, mock_config):
+        """web__search tool is registered with correct schema."""
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+
+        assert "web__search" in by_name
+        assert by_name["web__search"].input_schema == {"query": str, "mode": str}
+
+    def test_observe_logs_tool_registered_with_expected_schema(self, mock_broker, mock_config):
+        """observe__logs tool is registered with correct schema."""
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+
+        assert "observe__logs" in by_name
+        assert by_name["observe__logs"].input_schema == {"hours": int, "filters": dict}
+
+    @pytest.mark.asyncio
+    async def test_observe_logs_routes_through_broker(self, mock_broker, mock_config):
+        """observe__logs invokes broker.observe logs route."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=True,
+            error=None,
+            result={
+                "logs": [
+                    {
+                        "timestamp_iso": "2026-03-01T12:00:00+00:00",
+                        "capability": "fs",
+                        "action": "read",
+                        "status": "completed",
+                        "duration_ms": 15,
+                    }
+                ]
+            },
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        logs_tool = by_name["observe__logs"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await logs_tool.handler({"hours": 24, "filters": {"capability": "fs"}})
+
+        mock_broker.route_operation.assert_called_once_with(
+            capability="observe",
+            action="logs",
+            params={"hours": 24, "limit": 100, "capability": "fs"},
+            chat_id="test_chat",
+        )
+        text = result["content"][0]["text"]
+        assert "Operation Logs (last 24h)" in text
+        assert "fs__read" in text
+
+    @pytest.mark.asyncio
+    async def test_observe_logs_rejects_invalid_tier_filter_type(self, mock_broker, mock_config):
+        """observe__logs returns validation error when filters.tier is not int-like."""
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        logs_tool = by_name["observe__logs"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await logs_tool.handler({"hours": 24, "filters": {"tier": "abc"}})
+
+        assert "filters.tier must be an integer" in result["content"][0]["text"]
+        mock_broker.route_operation.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_observe_logs_rejects_invalid_capability_filter_type(self, mock_broker, mock_config):
+        """observe__logs rejects non-string capability filters."""
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        logs_tool = by_name["observe__logs"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await logs_tool.handler({"hours": 24, "filters": {"capability": 123}})
+
+        assert "filters.capability must be a non-empty string" in result["content"][0]["text"]
+        mock_broker.route_operation.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_profiles_test_routes_through_broker(self, mock_broker, mock_config):
         """profiles__test invokes broker.route_operation with correct capability/action."""
@@ -378,6 +486,73 @@ class TestMCPTools:
         assert "❌ Ripgrep denied" in content
         assert "scope_violation" in content
 
+    @pytest.mark.asyncio
+    async def test_web_search_routes_through_broker(self, mock_broker, mock_config):
+        """web__search invokes broker.route_operation with correct params."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=True,
+            error=None,
+            result={
+                "query": "python asyncio",
+                "results": [
+                    {
+                        "title": "AsyncIO Docs",
+                        "url": "https://docs.python.org/3/library/asyncio.html",
+                        "snippet": "Asynchronous I/O in Python.",
+                    }
+                ],
+            },
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        web_tool = by_name["web__search"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await web_tool.handler({"query": "python asyncio", "mode": "fresh"})
+
+        mock_broker.route_operation.assert_called_once_with(
+            capability="web",
+            action="search",
+            params={"query": "python asyncio", "mode": "fresh"},
+            chat_id="test_chat",
+        )
+        content = result["content"][0]["text"]
+        assert "Top 1 results" in content
+        assert "AsyncIO Docs" in content
+
+    @pytest.mark.asyncio
+    async def test_web_search_denied_returns_error_message(self, mock_broker, mock_config):
+        """web__search denied by broker returns error text."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=False,
+            error={"message": "Brave API key not configured"},
+            result=None,
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        web_tool = by_name["web__search"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await web_tool.handler({"query": "python asyncio", "mode": "fresh"})
+
+        content = result["content"][0]["text"]
+        assert "❌ Web search denied" in content
+        assert "not configured" in content
+
 
 class TestPreToolUseHook:
     """Test PreToolUse hook validation."""
@@ -462,6 +637,7 @@ class TestPreToolUseHook:
             "mcp__sohnbot__profiles__build",
             "mcp__sohnbot__profiles__test",
             "mcp__sohnbot__profiles__ripgrep",
+            "mcp__sohnbot__web__search",
         ]
 
         for tool_name in tool_names:

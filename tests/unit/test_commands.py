@@ -18,12 +18,14 @@ from scripts.migrate import apply_migrations
 from src.sohnbot.gateway.commands import (
     handle_heartbeat_command,
     handle_health_command,
+    handle_logs_command,
     handle_notify_command,
     handle_schedule_command,
     handle_status_command,
     set_schedule_broker,
 )
 from src.sohnbot.capabilities.scheduler import create_job
+from src.sohnbot.persistence.audit import log_operation_end, log_operation_start
 from src.sohnbot.persistence.db import DatabaseManager, set_db_manager
 
 
@@ -66,6 +68,46 @@ async def test_notify_status_command(setup_database):
     await handle_notify_command("123", "/notify off")
     response = await handle_notify_command("123", "/notify status")
     assert response == "Notifications are OFF."
+
+
+@pytest.mark.asyncio
+async def test_logs_command_invalid_hours_format(setup_database):
+    response = await handle_logs_command("123", "/logs abc", str(setup_database.db_path))
+    assert "Hours must be a number" in response
+
+
+@pytest.mark.asyncio
+async def test_logs_command_hours_out_of_range(setup_database):
+    response = await handle_logs_command("123", "/logs 1000", str(setup_database.db_path))
+    assert "between 1 and 720" in response
+
+
+@pytest.mark.asyncio
+async def test_logs_command_returns_empty_message(setup_database):
+    response = await handle_logs_command("123", "/logs", str(setup_database.db_path))
+    assert "No operations found in last 24 hours." == response
+
+
+@pytest.mark.asyncio
+async def test_logs_command_formats_entries(setup_database):
+    operation_id = "logs-test-op"
+    await log_operation_start(
+        operation_id=operation_id,
+        capability="fs",
+        action="read",
+        chat_id="chat-1",
+        tier=0,
+        file_paths=["README.md"],
+    )
+    await log_operation_end(
+        operation_id=operation_id,
+        status="completed",
+        duration_ms=42,
+    )
+
+    response = await handle_logs_command("123", "/logs 24", str(setup_database.db_path))
+    assert "Operation Logs (last 24h)" in response
+    assert "fs__read" in response
 
 
 def _sample_snapshot() -> StatusSnapshot:

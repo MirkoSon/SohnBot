@@ -309,6 +309,53 @@ class TestTelegramClient:
         update.message.reply_text.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_cmd_logs_authorized(self, message_router):
+        """Authorized /logs command should reply with logs text."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 123456789
+        update.message.text = "/logs 24"
+        update.message.reply_text = AsyncMock()
+        message_router.agent_session = MagicMock()
+        message_router.agent_session.config = MagicMock()
+        message_router.agent_session.config.get.return_value = "data/custom.db"
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_logs_command",
+            new=AsyncMock(return_value="📋 Operation Logs"),
+        ) as logs_handler:
+            await client.cmd_logs(update, None)
+
+        logs_handler.assert_awaited_once_with("123456789", "/logs 24", "data/custom.db")
+        update.message.reply_text.assert_awaited_once_with("📋 Operation Logs")
+
+    @pytest.mark.asyncio
+    async def test_cmd_logs_unauthorized(self, message_router):
+        """Unauthorized /logs command should be ignored."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 111111111
+        update.message.text = "/logs"
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_logs_command",
+            new=AsyncMock(return_value="ignored"),
+        ) as logs_handler:
+            await client.cmd_logs(update, None)
+
+        logs_handler.assert_not_awaited()
+        update.message.reply_text.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_cmd_schedule_authorized(self, message_router):
         """Authorized /schedule command should reply with scheduler text."""
         client = TelegramClient(

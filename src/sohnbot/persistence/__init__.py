@@ -23,6 +23,16 @@ from .postponement import (
     list_active_operations,
     delete_operation,
 )
+from .search_volume import (
+    increment_daily_search_count,
+    mark_alert_sent,
+    claim_alert_slot,
+    cleanup_old_volume_records,
+)
+from .operation_logs import (
+    query_operation_logs,
+    cleanup_old_operation_logs,
+)
 
 __all__ = [
     "DatabaseManager",
@@ -48,4 +58,10 @@ __all__ = [
     "get_active_operation_by_chat",
     "list_active_operations",
     "delete_operation",
+    "increment_daily_search_count",
+    "mark_alert_sent",
+    "claim_alert_slot",
+    "cleanup_old_volume_records",
+    "query_operation_logs",
+    "cleanup_old_operation_logs",
 ]

@@ -91,9 +91,11 @@ class AgentSession:
                 "mcp__sohnbot__profiles__build",
                 "mcp__sohnbot__profiles__test",
                 "mcp__sohnbot__profiles__ripgrep",
+                "mcp__sohnbot__web__search",
                 "mcp__sohnbot__observe__status",
                 "mcp__sohnbot__observe__resources",
                 "mcp__sohnbot__observe__health",
+                "mcp__sohnbot__observe__logs",
             ],
             hooks={
                 "PreToolUse": [validate_tool_use]

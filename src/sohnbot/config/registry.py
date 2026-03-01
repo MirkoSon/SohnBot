@@ -311,14 +311,14 @@ REGISTRY: dict[str, ConfigKey] = {
         value_type=int,
         default=7,
         min_value=1,
-        max_value=30,
+        max_value=90,
     ),
     "search.volume_alert_threshold": ConfigKey(
         tier="dynamic",
         value_type=int,
         default=100,
-        min_value=10,
-        max_value=1000,
+        min_value=1,
+        max_value=10000,
     ),
 
     # ===== OBSERVABILITY (Static binding, Dynamic settings) =====

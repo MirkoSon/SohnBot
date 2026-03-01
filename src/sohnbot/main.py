@@ -72,6 +72,28 @@ async def initialize_heartbeat_job() -> None:
         logger.error("heartbeat_initialization_failed", error=str(exc), exc_info=True)
 
 
+async def initialize_operation_logs_cleanup_job() -> None:
+    """Create default weekly operation logs cleanup job if missing."""
+    logger.info("operation_logs_cleanup_initialization_started")
+    try:
+        existing = await get_job_by_name("Operation Logs Cleanup")
+        if existing is not None:
+            logger.info("operation_logs_cleanup_job_already_exists", job_id=existing.get("id"))
+            return
+
+        job = await create_job(
+            name="Operation Logs Cleanup",
+            cron_expr="0 3 * * 0",
+            timezone="UTC",
+            action="cleanup_operation_logs",
+            action_params={"retention_days": 90},
+            enabled=True,
+        )
+        logger.info("operation_logs_cleanup_job_created", job_id=job.get("id"))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("operation_logs_cleanup_initialization_failed", error=str(exc), exc_info=True)
+
+
 async def run_main() -> None:
     """Run background runtime tasks for SohnBot."""
     config = get_config_manager()
@@ -88,6 +110,7 @@ async def run_main() -> None:
             name="scheduler-executor",
         )
         await initialize_heartbeat_job()
+        await initialize_operation_logs_cleanup_job()
 
         http_enabled = bool(config.get("observability.http_enabled"))
         if http_enabled:

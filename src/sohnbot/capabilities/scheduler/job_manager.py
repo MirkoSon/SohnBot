@@ -17,7 +17,7 @@ from .timezone_handler import get_next_run_time
 
 logger = structlog.get_logger(__name__)
 
-ALLOWED_ACTIONS = {"agent_query", "profile_execute", "heartbeat"}
+ALLOWED_ACTIONS = {"agent_query", "profile_execute", "heartbeat", "cleanup_operation_logs"}
 
 
 def _validate_cron(cron_expr: str) -> None:

@@ -163,6 +163,19 @@ class TestValidateConfigValue:
         assert validate_config_value("commands.ripgrep_timeout_seconds", 301)[0] is False
         assert validate_config_value("commands.ripgrep_timeout_seconds", 30)[0] is True
 
+    def test_validate_search_cache_retention_range(self):
+        """search cache retention should enforce 1..90 range."""
+        assert validate_config_value("search.cache_retention_days", 0)[0] is False
+        assert validate_config_value("search.cache_retention_days", 91)[0] is False
+        assert validate_config_value("search.cache_retention_days", 7)[0] is True
+
+    def test_validate_search_volume_alert_threshold_range(self):
+        """search volume alert threshold should enforce 1..10000 range."""
+        assert validate_config_value("search.volume_alert_threshold", 0)[0] is False
+        assert validate_config_value("search.volume_alert_threshold", 1)[0] is True
+        assert validate_config_value("search.volume_alert_threshold", 10001)[0] is False
+        assert validate_config_value("search.volume_alert_threshold", 100)[0] is True
+
     def test_validate_nonexistent_key(self):
         """Should reject validation for nonexistent key."""
         is_valid, error = validate_config_value("nonexistent.key", "value")

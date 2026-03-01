@@ -94,6 +94,7 @@ def test_classify_tier_0_read_operations():
     assert classify_tier("git", "diff", 0) == 0
     assert classify_tier("git", "list_snapshots", 0) == 0
     assert classify_tier("scheduler", "list", 0) == 0
+    assert classify_tier("observe", "logs", 0) == 0
     assert classify_tier("web", "search", 0) == 0
     assert classify_tier("profiles", "lint", 0) == 0
     assert classify_tier("profiles", "build", 0) == 0
@@ -202,6 +203,80 @@ async def test_route_operation_logs_end(mock_log_end, mock_log_start, tmp_path):
     call_args = mock_log_end.call_args[1]
     assert call_args["status"] == "completed"
     assert "duration_ms" in call_args
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.query_operation_logs", new_callable=AsyncMock)
+async def test_route_observe_logs_through_broker(
+    mock_query_logs,
+    mock_log_end,
+    mock_log_start,
+    tmp_path,
+):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+
+    config = MagicMock()
+    config.get.side_effect = lambda key: str(tmp_path / "test.db") if key == "database.path" else None
+    router = BrokerRouter(ScopeValidator([str(allowed_root)]), config_manager=config)
+    mock_query_logs.return_value = [{"operation_id": "op-1", "status": "completed"}]
+
+    result = await router.route_operation(
+        capability="observe",
+        action="logs",
+        params={"hours": 24, "capability": "fs"},
+        chat_id="chat-1",
+    )
+
+    assert result.allowed is True
+    assert result.result["count"] == 1
+    mock_query_logs.assert_awaited_once_with(
+        db_path=str(tmp_path / "test.db"),
+        hours=24,
+        capability="fs",
+        status=None,
+        chat_id=None,
+        tier=None,
+        limit=100,
+    )
+
+
+@pytest.mark.asyncio
+async def test_route_observe_logs_rejects_invalid_status_filter(tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    router = BrokerRouter(ScopeValidator([str(allowed_root)]))
+
+    result = await router.route_operation(
+        capability="observe",
+        action="logs",
+        params={"hours": 24, "status": "broken-status"},
+        chat_id="chat-1",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "status must be one of" in result.error["message"]
+
+
+@pytest.mark.asyncio
+async def test_route_observe_logs_rejects_invalid_capability_filter(tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    router = BrokerRouter(ScopeValidator([str(allowed_root)]))
+
+    result = await router.route_operation(
+        capability="observe",
+        action="logs",
+        params={"hours": 24, "capability": "   "},
+        chat_id="chat-1",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "capability filter must be a non-empty string" in result.error["message"]
 
 
 @pytest.mark.asyncio
@@ -1026,3 +1101,88 @@ async def test_dry_run_preview_profile(mock_log_end, mock_log_start, tmp_path):
     assert result.result.get("preview") is True
     assert "DRY RUN" in result.result.get("message", "")
     assert "pylint" in result.result.get("command", "")
+
+
+# ─── web search tests (story 6.1) ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_web_search_success_routes_to_capability(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    fake_result = {
+        "results": [
+            {"title": "Result", "url": "https://example.com", "snippet": "Example snippet"}
+        ],
+        "total_results": 1,
+        "query": "python asyncio",
+        "mode": "fresh",
+        "cached": False,
+    }
+
+    with patch(
+        "src.sohnbot.broker.router.brave_search",
+        new=AsyncMock(return_value=fake_result),
+    ) as mock_search:
+        result = await router.route_operation(
+            capability="web",
+            action="search",
+            params={"query": "python asyncio", "mode": "fresh"},
+            chat_id="chat-web",
+        )
+
+    mock_search.assert_awaited_once_with(
+        query="python asyncio",
+        mode="fresh",
+        db_path="data/sohnbot.db",
+        config_manager=None,
+    )
+    assert result.allowed is True
+    assert result.tier == 0
+    assert result.result["total_results"] == 1
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_web_search_missing_query_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="web",
+        action="search",
+        params={},
+        chat_id="chat-web",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "query" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_web_search_invalid_mode_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="web",
+        action="search",
+        params={"query": "python", "mode": "wrong"},
+        chat_id="chat-web",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "mode" in result.error["message"]

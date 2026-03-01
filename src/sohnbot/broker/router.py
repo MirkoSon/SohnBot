@@ -26,6 +26,7 @@ from ..capabilities.scheduler import (
     get_job_by_name,
     list_jobs,
 )
+from ..capabilities.web import WebCapabilityError, brave_search
 from .operation_classifier import classify_tier
 from .scope_validator import ScopeValidator
 from ..persistence.audit import log_operation_start, log_operation_end
@@ -34,10 +35,12 @@ from ..persistence.notification import (
     enqueue_notification,
     get_notifications_enabled,
 )
+from ..persistence.operation_logs import query_operation_logs
 from ..config.manager import ConfigManager
 from ..config.registry import _SAFE_COMMAND_RE as _SAFE_PROFILE_RE
 
 logger = structlog.get_logger(__name__)
+_OBSERVE_LOG_STATUS_FILTERS = {"in_progress", "completed", "failed", "postponed", "cancelled"}
 
 
 @dataclass
@@ -104,7 +107,7 @@ class BrokerRouter:
         7. Log operation end
 
         Args:
-            capability: Capability module (fs, git, sched, web, profiles)
+            capability: Capability module (fs, git, scheduler, web, profiles, observe)
             action: Operation action (read, patch, commit, etc.)
             params: Operation parameters
             chat_id: Telegram chat ID (user identifier)
@@ -609,6 +612,197 @@ class BrokerRouter:
                             },
                         )
 
+        if capability == "web":
+            if action != "search":
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": f"Unsupported web action: {action}",
+                        "details": {"capability": capability, "action": action},
+                        "retryable": False,
+                    },
+                )
+
+            query = params.get("query")
+            if not isinstance(query, str) or not query.strip():
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Missing or invalid required parameter: query",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+            if len(query.strip()) > 500:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "Search query exceeds 500 characters",
+                        "details": {"query_length": len(query.strip())},
+                        "retryable": False,
+                    },
+                )
+
+            mode = params.get("mode", "fresh")
+            if mode not in {"fresh", "static"}:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "mode must be 'fresh' or 'static'",
+                        "details": {"mode": mode},
+                        "retryable": False,
+                    },
+                )
+
+            params["query"] = query.strip()
+            params["mode"] = mode
+
+        if capability == "observe":
+            if action != "logs":
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": f"Unsupported observe action: {action}",
+                        "details": {"capability": capability, "action": action},
+                        "retryable": False,
+                    },
+                )
+
+            try:
+                hours = int(params.get("hours", 24))
+            except (TypeError, ValueError):
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "hours must be an integer between 1 and 720",
+                        "details": {"action": action, "hours": params.get("hours")},
+                        "retryable": False,
+                    },
+                )
+            if hours < 1 or hours > 720:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "hours must be an integer between 1 and 720",
+                        "details": {"action": action, "hours": hours},
+                        "retryable": False,
+                    },
+                )
+            params["hours"] = hours
+
+            if "capability" in params and params.get("capability") is not None:
+                capability_filter = params.get("capability")
+                if not isinstance(capability_filter, str) or not capability_filter.strip():
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "capability filter must be a non-empty string",
+                            "details": {"action": action, "capability": capability_filter},
+                            "retryable": False,
+                        },
+                    )
+                params["capability"] = capability_filter.strip()
+
+            if "status" in params and params.get("status") is not None:
+                status_filter = params.get("status")
+                if not isinstance(status_filter, str) or status_filter not in _OBSERVE_LOG_STATUS_FILTERS:
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": (
+                                "status must be one of: "
+                                f"{', '.join(sorted(_OBSERVE_LOG_STATUS_FILTERS))}"
+                            ),
+                            "details": {"action": action, "status": status_filter},
+                            "retryable": False,
+                        },
+                    )
+                params["status"] = status_filter
+
+            if "chat_id" in params and params.get("chat_id") is not None:
+                chat_filter = params.get("chat_id")
+                if not isinstance(chat_filter, str) or not chat_filter.strip():
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "chat_id filter must be a non-empty string",
+                            "details": {"action": action, "chat_id": chat_filter},
+                            "retryable": False,
+                        },
+                    )
+                params["chat_id"] = chat_filter.strip()
+
+            if "tier" in params and params.get("tier") is not None:
+                try:
+                    tier_filter = int(params["tier"])
+                except (TypeError, ValueError):
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "tier must be one of: 0, 1, 2, 3",
+                            "details": {"action": action, "tier": params.get("tier")},
+                            "retryable": False,
+                        },
+                    )
+                if tier_filter not in {0, 1, 2, 3}:
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "tier must be one of: 0, 1, 2, 3",
+                            "details": {"action": action, "tier": tier_filter},
+                            "retryable": False,
+                        },
+                    )
+                params["tier"] = tier_filter
+
         # 4. Check limits (e.g., max command profiles per request)
         # TODO: Implement limit checking (Story 1.5+)
 
@@ -719,7 +913,7 @@ class BrokerRouter:
                 },
             )
 
-        except (FileCapabilityError, GitCapabilityError) as e:
+        except (FileCapabilityError, GitCapabilityError, WebCapabilityError) as e:
             # Log operation end (capability validation/runtime error)
             duration_ms = self._calculate_duration(operation_id)
             await log_operation_end(
@@ -1007,6 +1201,48 @@ class BrokerRouter:
                 job = await edit_job(job_id=job_id, updates=params["updates"])
                 return {"updated": job is not None, "job_id": job_id, "job": job}
 
+        if capability == "web":
+            if action == "search":
+                db_path = "data/sohnbot.db"
+                if self.config_manager:
+                    try:
+                        db_path = str(self.config_manager.get("database.path"))
+                    except (TypeError, ValueError, KeyError) as exc:
+                        logger.warning("web_db_path_config_invalid", error=str(exc))
+                        db_path = "data/sohnbot.db"
+                    except RuntimeError as exc:
+                        logger.warning("web_db_path_config_error", error=str(exc))
+                        db_path = "data/sohnbot.db"
+                return await brave_search(
+                    query=params["query"],
+                    mode=params.get("mode", "fresh"),
+                    db_path=db_path,
+                    config_manager=self.config_manager,
+                )
+
+        if capability == "observe":
+            if action == "logs":
+                db_path = "data/sohnbot.db"
+                if self.config_manager:
+                    try:
+                        db_path = str(self.config_manager.get("database.path"))
+                    except (TypeError, ValueError, KeyError) as exc:
+                        logger.warning("observe_logs_db_path_config_invalid", error=str(exc))
+                        db_path = "data/sohnbot.db"
+                    except RuntimeError as exc:
+                        logger.warning("observe_logs_db_path_config_error", error=str(exc))
+                        db_path = "data/sohnbot.db"
+                logs = await query_operation_logs(
+                    db_path=db_path,
+                    hours=int(params.get("hours", 24)),
+                    capability=params.get("capability"),
+                    status=params.get("status"),
+                    chat_id=params.get("chat_id"),
+                    tier=params.get("tier"),
+                    limit=int(params.get("limit", 100)),
+                )
+                return {"logs": logs, "count": len(logs)}
+
         if capability == "profiles":
             if action == "lint":
                 from ..capabilities.command_profiles import execute_lint_profile
@@ -1225,6 +1461,12 @@ class BrokerRouter:
                 f"✅ Ripgrep profile | exit_code={exit_code} | "
                 f"matches={total_matches} | repo={repo}"
             )
+
+        if capability == "web" and action == "search" and status == "completed":
+            data = result or {}
+            total_results = data.get("total_results", 0)
+            mode = data.get("mode", params.get("mode", "fresh"))
+            return f"✅ Web search | mode={mode} | results={total_results}"
 
         if capability == "git" and action == "commit" and status == "completed":
             data = result or {}

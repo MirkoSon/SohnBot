@@ -427,4 +427,28 @@ async def _dispatch_job_action(job: dict[str, Any]) -> None:
         logger.info("heartbeat_report_enqueued", job_name=job.get("name"), admin_chat_id=admin_chat_id)
         return
 
+    if action == "cleanup_operation_logs":
+        from ...persistence.operation_logs import cleanup_old_operation_logs
+
+        retention_days = params.get("retention_days", 90)
+        try:
+            retention_days = int(retention_days)
+        except (TypeError, ValueError):
+            retention_days = 90
+
+        db_path = "data/sohnbot.db"
+        try:
+            db_path = str(get_config_manager().get("database.path"))
+        except Exception:  # noqa: BLE001
+            db_path = "data/sohnbot.db"
+
+        deleted = await cleanup_old_operation_logs(db_path=db_path, retention_days=retention_days)
+        logger.info(
+            "operation_logs_cleanup_job_completed",
+            job_name=job.get("name"),
+            deleted=deleted,
+            retention_days=retention_days,
+        )
+        return
+
     raise ValueError(f"Unsupported scheduler action: {action}")

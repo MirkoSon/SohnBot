@@ -786,6 +786,46 @@ def create_sohnbot_mcp_server(broker, config):
             lines.append(f"... ({total_matches - 100} more matches)")
         return _as_mcp_text("\n".join(lines))
 
+    @tool("web__search", "Search web with Brave API", {"query": str, "mode": str})
+    async def web_search(args):
+        """Run Brave web search via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        query = args.get("query")
+        mode = args.get("mode", "fresh")
+        logger.info(
+            "mcp_tool_invoked",
+            tool="web__search",
+            chat_id=chat_id,
+            mode=mode,
+            query_length=len(query or ""),
+        )
+
+        result = await broker.route_operation(
+            capability="web",
+            action="search",
+            params={"query": query, "mode": mode},
+            chat_id=chat_id,
+        )
+
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="web__search", error=error_msg)
+            return _as_mcp_text(f"❌ Web search denied: {error_msg}")
+
+        data = result.result or {}
+        items = data.get("results", [])
+        if not items:
+            return _as_mcp_text(f"No results found for: {data.get('query', query)}")
+
+        lines = [f"Top {len(items)} results for: {data.get('query', query)}"]
+        for idx, item in enumerate(items, start=1):
+            title = item.get("title", "")
+            url = item.get("url", "")
+            snippet = item.get("snippet", "")
+            lines.append(f"{idx}. {title}\n{url}\n{snippet}")
+        return _as_mcp_text("\n\n".join(lines))
+
     @tool("observe__status", "Get current system status snapshot", {})
     async def observe_status(args):
         """Read latest status snapshot from in-memory observability cache."""
@@ -866,6 +906,73 @@ def create_sohnbot_mcp_server(broker, config):
             lines.append(line)
         return _as_mcp_text("\n".join(lines))
 
+    @tool("observe__logs", "Query recent operation logs with optional filters", {"hours": int, "filters": dict})
+    async def observe_logs(args):
+        """Query execution logs via broker observe capability."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        try:
+            hours = int(args.get("hours", 24))
+        except (TypeError, ValueError):
+            return _as_mcp_text("Error: hours must be an integer between 1 and 720 (30 days)")
+        filters = args.get("filters") or {}
+        if not isinstance(filters, dict):
+            return _as_mcp_text("Error: filters must be an object")
+        if hours < 1 or hours > 720:
+            return _as_mcp_text("Error: hours must be between 1 and 720 (30 days)")
+
+        params = {"hours": hours, "limit": 100}
+        capability_filter = filters.get("capability")
+        if capability_filter is not None:
+            if not isinstance(capability_filter, str) or not capability_filter.strip():
+                return _as_mcp_text("Error: filters.capability must be a non-empty string")
+            params["capability"] = capability_filter.strip()
+
+        status_filter = filters.get("status")
+        if status_filter is not None:
+            if not isinstance(status_filter, str):
+                return _as_mcp_text("Error: filters.status must be a string")
+            params["status"] = status_filter
+
+        chat_filter = filters.get("chat_id")
+        if chat_filter is not None:
+            if not isinstance(chat_filter, str) or not chat_filter.strip():
+                return _as_mcp_text("Error: filters.chat_id must be a non-empty string")
+            params["chat_id"] = chat_filter.strip()
+
+        tier_filter = filters.get("tier")
+        if tier_filter is not None:
+            try:
+                params["tier"] = int(tier_filter)
+            except (TypeError, ValueError):
+                return _as_mcp_text("Error: filters.tier must be an integer (0, 1, 2, or 3)")
+
+        result = await broker.route_operation(
+            capability="observe",
+            action="logs",
+            params=params,
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="observe__logs", error=error_msg)
+            return _as_mcp_text(f"❌ Operation denied: {error_msg}")
+
+        data = result.result or {}
+        logs = data.get("logs", [])
+        if not logs:
+            return _as_mcp_text(f"No operations found in last {hours} hours.")
+
+        lines = [f"Operation Logs (last {hours}h) — {len(logs)} results"]
+        for entry in logs:
+            op_type = f"{entry.get('capability')}__{entry.get('action')}"
+            duration = entry.get("duration_ms")
+            duration_text = f"{duration}ms" if isinstance(duration, int) else "N/A"
+            lines.append(
+                f"- {entry.get('timestamp_iso')} | {op_type} | {entry.get('status')} | {duration_text}"
+            )
+        return _as_mcp_text("\n".join(lines))
+
     # Create and return server
     return create_sdk_mcp_server(
         name="sohnbot",
@@ -895,8 +1002,10 @@ def create_sohnbot_mcp_server(broker, config):
             profiles_build,
             profiles_test,
             profiles_ripgrep,
+            web_search,
             observe_status,
             observe_resources,
             observe_health,
+            observe_logs,
         ]
     )

@@ -281,3 +281,28 @@ async def test_timeout_less_than_one_second_clamped_to_one(setup_database):
         patch("src.sohnbot.capabilities.scheduler.executor.asyncio.wait_for", side_effect=fake_wait_for),
     ):
         await _execute_single_job({**job, "last_completed_slot": None})
+
+
+@pytest.mark.asyncio
+async def test_cleanup_operation_logs_action_dispatches(setup_database):
+    from src.sohnbot.capabilities.scheduler.executor import _dispatch_job_action
+
+    config = MagicMock()
+    config.get.side_effect = lambda key: "data/test.db" if key == "database.path" else None
+    job = {
+        "name": "Operation Logs Cleanup",
+        "action": "cleanup_operation_logs",
+        "action_params": {"retention_days": 45},
+        "_slot_timestamp": 0,
+    }
+
+    with (
+        patch("src.sohnbot.capabilities.scheduler.executor.get_config_manager", return_value=config),
+        patch(
+            "src.sohnbot.persistence.operation_logs.cleanup_old_operation_logs",
+            new=AsyncMock(return_value=12),
+        ) as mock_cleanup,
+    ):
+        await _dispatch_job_action(job)
+
+    mock_cleanup.assert_awaited_once_with(db_path="data/test.db", retention_days=45)
