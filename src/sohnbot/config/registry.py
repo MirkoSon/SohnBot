@@ -62,6 +62,18 @@ def _validate_test_command(value: str) -> bool:
     return True
 
 
+def _validate_ripgrep_command(value: str) -> bool:
+    """Reject empty strings and shell metacharacters in ripgrep command."""
+    if not value or not value.strip():
+        raise ValueError("ripgrep_command must not be empty")
+    if not _SAFE_COMMAND_RE.match(value):
+        raise ValueError(
+            "ripgrep_command contains disallowed characters; "
+            "use alphanumeric, spaces, dashes, underscores, dots, and slashes only"
+        )
+    return True
+
+
 @dataclass
 class ConfigKey:
     """Defines a single configuration key with validation and tier classification.
@@ -251,6 +263,12 @@ REGISTRY: dict[str, ConfigKey] = {
         default="pytest",
         validator=_validate_test_command,
     ),
+    "commands.ripgrep_command": ConfigKey(
+        tier="dynamic",
+        value_type=str,
+        default="rg",
+        validator=_validate_ripgrep_command,
+    ),
     "commands.lint_timeout_seconds": ConfigKey(
         tier="dynamic",
         value_type=int,
@@ -272,12 +290,19 @@ REGISTRY: dict[str, ConfigKey] = {
         min_value=60,
         max_value=3600,
     ),
+    "commands.ripgrep_timeout_seconds": ConfigKey(
+        tier="dynamic",
+        value_type=int,
+        default=30,
+        min_value=1,
+        max_value=300,
+    ),
     "commands.max_chain_length": ConfigKey(
         tier="dynamic",
         value_type=int,
         default=5,
         min_value=1,
-        max_value=10,
+        max_value=20,
     ),
 
     # ===== WEB SEARCH (Dynamic - Operational tuning) =====

@@ -396,6 +396,47 @@ class TestTelegramClient:
         heartbeat_handler.assert_not_awaited()
         update.message.reply_text.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_cmd_dryrun_authorized(self, message_router):
+        """Authorized /dryrun should route to runtime and reply."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 123456789
+        update.message.text = "/dryrun lint src/"
+        update.message.reply_text = AsyncMock()
+        message_router.route_to_runtime = AsyncMock(return_value="preview")
+
+        await client.cmd_dryrun(update, None)
+
+        message_router.route_to_runtime.assert_awaited_once_with(
+            chat_id="123456789",
+            message="/dryrun lint src/",
+            send_message=client.send_message,
+        )
+        update.message.reply_text.assert_awaited_once_with("preview")
+
+    @pytest.mark.asyncio
+    async def test_cmd_dryrun_usage_when_missing_args(self, message_router):
+        """Bare /dryrun should return usage."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 123456789
+        update.message.text = "/dryrun"
+        update.message.reply_text = AsyncMock()
+
+        await client.cmd_dryrun(update, None)
+
+        update.message.reply_text.assert_awaited_once()
+        assert "Usage: /dryrun" in update.message.reply_text.call_args[0][0]
+
 
 class TestFormatters:
     """Test message formatting functions."""

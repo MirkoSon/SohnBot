@@ -77,13 +77,13 @@ development_status:
   4-6-daily-heartbeat-system: done
   epic-4-retrospective: done
 
-  epic-5: in-progress
-  5-1-lint-project-profile: review
+  epic-5: done
+  5-1-lint-project-profile: done
   5-2-build-project-profile: done
   5-3-run-tests-profile: done
-  5-4-ripgrep-search-profile: backlog
-  5-5-profile-chaining-limit-dry-run-mode: backlog
-  epic-5-retrospective: optional
+  5-4-ripgrep-search-profile: done
+  5-5-profile-chaining-limit-dry-run-mode: done
+  epic-5-retrospective: done
 
   epic-6: backlog
   6-1-brave-web-search-integration: backlog

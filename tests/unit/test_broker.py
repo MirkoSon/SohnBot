@@ -97,6 +97,7 @@ def test_classify_tier_0_read_operations():
     assert classify_tier("web", "search", 0) == 0
     assert classify_tier("profiles", "lint", 0) == 0
     assert classify_tier("profiles", "build", 0) == 0
+    assert classify_tier("profiles", "ripgrep", 0) == 0
 
 
 def test_classify_tier_1_single_file():
@@ -770,3 +771,258 @@ def test_format_notification_test_failed(tmp_path):
     assert "❌ FAILED" in msg
     assert "Test profile" in msg
     assert "exit_code=1" in msg
+
+
+# ─── profiles/ripgrep broker tests ───────────────────────────────────────────
+
+def test_classify_tier_profiles_ripgrep_is_tier_0():
+    """profiles/ripgrep must be classified as Tier 0 (read-only execution)."""
+    assert classify_tier("profiles", "ripgrep", 0) == 0
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_ripgrep_missing_repo_path_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    validator = ScopeValidator([str(tmp_path)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="ripgrep",
+        params={"pattern": "foo"},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "repo_path" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_ripgrep_missing_pattern_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="ripgrep",
+        params={"repo_path": str(allowed_root)},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "pattern" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_ripgrep_invalid_file_types_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="ripgrep",
+        params={"repo_path": str(allowed_root), "pattern": "foo", "file_types": "py"},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "file_types" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_ripgrep_success_routes_to_capability(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    repo_path = str(allowed_root)
+
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    fake_result = {
+        "matches": [{"file": "a.py", "line": 1, "text": "foo"}],
+        "total_matches": 1,
+        "exit_code": 0,
+        "command_used": "rg --json foo",
+        "pattern": "foo",
+    }
+
+    with patch(
+        "src.sohnbot.capabilities.command_profiles.execute_ripgrep_profile",
+        new=AsyncMock(return_value=fake_result),
+    ) as mock_exec:
+        result = await router.route_operation(
+            capability="profiles",
+            action="ripgrep",
+            params={"repo_path": repo_path, "pattern": "foo", "file_types": ["py"]},
+            chat_id="test_chat",
+        )
+
+    mock_exec.assert_awaited_once()
+    assert result.allowed is True
+    assert result.result["total_matches"] == 1
+    assert result.snapshot_ref is None
+
+
+def test_format_notification_ripgrep_completed(tmp_path):
+    router = BrokerRouter(ScopeValidator([str(tmp_path)]))
+    msg = router._format_notification_message(
+        capability="profiles",
+        action="ripgrep",
+        params={"repo_path": "/some/project"},
+        status="completed",
+        snapshot_ref=None,
+        result={"exit_code": 0, "total_matches": 12},
+    )
+    assert "Ripgrep profile" in msg
+    assert "matches=12" in msg
+    assert "exit_code=0" in msg
+
+
+# ─── profile chain limit + dry-run tests (story 5.5) ────────────────────────
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profile_counter_increments_and_resets(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    with patch(
+        "src.sohnbot.capabilities.command_profiles.execute_lint_profile",
+        new=AsyncMock(return_value={"passed": True, "exit_code": 0, "stdout": "", "stderr": ""}),
+    ):
+        for _ in range(3):
+            result = await router.route_operation(
+                capability="profiles",
+                action="lint",
+                params={"repo_path": str(allowed_root), "files": []},
+                chat_id="chat-a",
+            )
+            assert result.allowed is True
+
+    assert router.get_profile_count("chat-a") == 3
+    router.reset_profile_counter("chat-a")
+    assert router.get_profile_count("chat-a") == 0
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profile_chain_limit_enforced(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    with patch(
+        "src.sohnbot.capabilities.command_profiles.execute_lint_profile",
+        new=AsyncMock(return_value={"passed": True, "exit_code": 0, "stdout": "", "stderr": ""}),
+    ):
+        for _ in range(5):
+            result = await router.route_operation(
+                capability="profiles",
+                action="lint",
+                params={"repo_path": str(allowed_root), "files": []},
+                chat_id="chat-limit",
+            )
+            assert result.allowed is True
+
+        blocked = await router.route_operation(
+            capability="profiles",
+            action="lint",
+            params={"repo_path": str(allowed_root), "files": []},
+            chat_id="chat-limit",
+        )
+
+    assert blocked.allowed is False
+    assert blocked.error["code"] == "profile_chain_limit_exceeded"
+    assert "5/5 used" in blocked.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_non_profile_operations_not_counted(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="fs",
+        action="list",
+        params={"path": str(allowed_root)},
+        chat_id="chat-b",
+    )
+    assert result.allowed is True
+    assert router.get_profile_count("chat-b") == 0
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_dry_run_preview_file_patch_and_details(
+    mock_log_end, mock_log_start, tmp_path
+):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    target = allowed_root / "test.py"
+    target.write_text("old line\n")
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    patch_content = "--- test.py\n+++ test.py\n@@ -1 +1 @@\n-old line\n+new line\n"
+    with patch.object(router, "_mark_operation_dry_run", new=AsyncMock()):
+        result = await router.route_operation(
+            capability="fs",
+            action="apply_patch",
+            params={"path": str(target), "patch": patch_content},
+            chat_id="chat-dry",
+            dry_run=True,
+        )
+    assert result.allowed is True
+    assert result.tier == 0
+    assert result.result.get("preview") is True
+    assert "DRY RUN" in result.result.get("message", "")
+
+    # Ensure patch was not applied.
+    assert target.read_text() == "old line\n"
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_dry_run_preview_profile(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    with patch.object(router, "_mark_operation_dry_run", new=AsyncMock()):
+        result = await router.route_operation(
+            capability="profiles",
+            action="lint",
+            params={"repo_path": str(allowed_root), "files": ["test.py"]},
+            chat_id="chat-dry-prof",
+            dry_run=True,
+        )
+    assert result.allowed is True
+    assert result.result.get("preview") is True
+    assert "DRY RUN" in result.result.get("message", "")
+    assert "pylint" in result.result.get("command", "")

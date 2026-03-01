@@ -70,6 +70,7 @@ class TelegramClient:
         self.application.add_handler(CommandHandler("health", self.cmd_health))
         self.application.add_handler(CommandHandler("schedule", self.cmd_schedule))
         self.application.add_handler(CommandHandler("heartbeat", self.cmd_heartbeat))
+        self.application.add_handler(CommandHandler("dryrun", self.cmd_dryrun))
 
         # Start polling
         await self.application.initialize()
@@ -269,6 +270,42 @@ class TelegramClient:
 
         response = await handle_heartbeat_command(str(chat_id), update.message.text or "")
         await update.message.reply_text(response)
+
+    async def cmd_dryrun(self, update: Update, context):
+        """Handle /dryrun <prompt> by routing through runtime with dry-run marker."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_dryrun_command", chat_id=chat_id)
+            return
+
+        raw = (update.message.text or "").strip()
+        if raw == "/dryrun":
+            await update.message.reply_text("Usage: /dryrun <request>")
+            return
+
+        try:
+            response = await self.message_router.route_to_runtime(
+                chat_id=str(chat_id),
+                message=raw,
+                send_message=self.send_message,
+            )
+            if not response.strip():
+                return
+            formatted_messages = format_for_telegram(response)
+            for msg in formatted_messages:
+                await update.message.reply_text(msg)
+        except Exception as e:
+            logger.error(
+                "dryrun_message_handling_error",
+                chat_id=chat_id,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            await update.message.reply_text("❌ An error occurred processing your dry-run request.")
 
     async def send_message(self, chat_id: int, text: str) -> bool:
         """

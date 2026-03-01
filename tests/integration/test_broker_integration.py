@@ -232,3 +232,45 @@ async def test_execution_log_completeness(tmp_path, setup_database):
         assert log[4] is not None  # chat_id
         assert log[5] is not None  # tier
         assert log[6] in ("in_progress", "completed", "failed")  # status
+
+
+@pytest.mark.asyncio
+async def test_profiles_ripgrep_flow_via_broker(tmp_path, setup_database):
+    """profiles/ripgrep routes end-to-end and logs completed Tier 0 operation."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    fake_result = {
+        "matches": [{"file": "src/a.py", "line": 10, "text": "foo()"}],
+        "total_matches": 1,
+        "exit_code": 0,
+        "command_used": "rg --json foo",
+        "pattern": "foo",
+    }
+
+    with patch(
+        "src.sohnbot.capabilities.command_profiles.execute_ripgrep_profile",
+        new=AsyncMock(return_value=fake_result),
+    ):
+        result = await router.route_operation(
+            capability="profiles",
+            action="ripgrep",
+            params={"repo_path": str(allowed_root), "pattern": "foo", "file_types": ["py"]},
+            chat_id="test_chat_123",
+        )
+
+    assert result.allowed is True
+    assert result.tier == 0
+    assert result.result["total_matches"] == 1
+
+    db = await setup_database.get_connection()
+    cursor = await db.execute(
+        "SELECT capability, action, tier, status FROM execution_log WHERE operation_id = ?",
+        (result.operation_id,),
+    )
+    log_entry = await cursor.fetchone()
+    await cursor.close()
+
+    assert log_entry == ("profiles", "ripgrep", 0, "completed")

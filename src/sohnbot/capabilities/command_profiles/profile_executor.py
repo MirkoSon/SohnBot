@@ -1,6 +1,7 @@
 """Command profile executor — runs linter, build, test (and future profiles) as subprocesses."""
 
 import asyncio
+import json
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -273,4 +274,107 @@ async def execute_test_profile(
         "stderr": stderr_bytes.decode("utf-8", errors="replace"),
         "command_used": command,
         "pattern": pattern,
+    }
+
+
+async def execute_ripgrep_profile(
+    repo_path: str,
+    pattern: str,
+    file_types: list[str] | None = None,
+    timeout_seconds: int = 30,
+    command: str = "rg",
+) -> dict:
+    """Run ripgrep search with JSON output parsing and timeout enforcement."""
+    cmd_parts = [command, "--json"]
+    if file_types:
+        for file_type in file_types:
+            cmd_parts.extend(["-t", str(file_type)])
+    cmd_parts.append(pattern)
+
+    logger.info(
+        "ripgrep_profile_started",
+        repo_path=repo_path,
+        pattern=pattern,
+        file_types=file_types,
+        timeout_seconds=timeout_seconds,
+        command=command,
+    )
+
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            proc = await asyncio.create_subprocess_exec(
+                *cmd_parts,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=repo_path,
+            )
+            stdout_bytes, stderr_bytes = await proc.communicate()
+
+    except TimeoutError:
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
+        logger.warning(
+            "ripgrep_profile_timeout",
+            repo_path=repo_path,
+            pattern=pattern,
+            timeout_seconds=timeout_seconds,
+        )
+        raise
+
+    except asyncio.CancelledError:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            try:
+                await asyncio.shield(proc.wait())
+            except asyncio.CancelledError:
+                pass
+        raise
+
+    exit_code = int(proc.returncode)
+    matches: list[dict] = []
+    stdout_text = stdout_bytes.decode("utf-8", errors="replace")
+    stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+
+    for line in stdout_text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+            if entry.get("type") != "match":
+                continue
+            data = entry.get("data") or {}
+            file_path = ((data.get("path") or {}).get("text") or "").strip()
+            line_number = data.get("line_number")
+            line_text = ((data.get("lines") or {}).get("text") or "").rstrip("\n")
+            if file_path and line_number is not None:
+                matches.append(
+                    {
+                        "file": file_path,
+                        "line": int(line_number),
+                        "text": line_text,
+                    }
+                )
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            logger.debug("ripgrep_json_parse_error", error=str(exc))
+            continue
+
+    logger.info(
+        "ripgrep_profile_completed",
+        repo_path=repo_path,
+        pattern=pattern,
+        total_matches=len(matches),
+        exit_code=exit_code,
+    )
+
+    return {
+        "matches": matches,
+        "total_matches": len(matches),
+        "exit_code": exit_code,
+        "stdout": stdout_text,
+        "stderr": stderr_text,
+        "command_used": " ".join(cmd_parts),
+        "pattern": pattern,
+        "file_types": file_types or [],
     }

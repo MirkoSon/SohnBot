@@ -568,3 +568,108 @@ class TestExecuteTestProfile:
             await run_and_cancel()
 
         mock_proc.kill.assert_called_once()
+
+
+class TestExecuteRipgrepProfile:
+    """Tests for execute_ripgrep_profile capability function."""
+
+    @pytest.mark.asyncio
+    async def test_ripgrep_success_parses_json_matches(self):
+        """Ripgrep JSON output should be parsed into structured matches."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_ripgrep_profile
+
+        stdout = (
+            b'{"type":"begin","data":{"path":{"text":"src/a.py"}}}\n'
+            b'{"type":"match","data":{"path":{"text":"src/a.py"},"line_number":12,"lines":{"text":"def foo():\\n"}}}\n'
+            b'{"type":"match","data":{"path":{"text":"src/b.py"},"line_number":5,"lines":{"text":"foo = 1\\n"}}}\n'
+            b'{"type":"end","data":{"path":{"text":"src/a.py"}}}\n'
+        )
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(stdout, b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+            result = await execute_ripgrep_profile(
+                repo_path="/repo",
+                pattern="foo",
+                file_types=["py"],
+                timeout_seconds=30,
+                command="rg",
+            )
+
+        args_passed = mock_exec.call_args[0]
+        assert args_passed == ("rg", "--json", "-t", "py", "foo")
+        assert result["exit_code"] == 0
+        assert result["total_matches"] == 2
+        assert result["matches"][0]["file"] == "src/a.py"
+        assert result["matches"][0]["line"] == 12
+        assert "def foo()" in result["matches"][0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_ripgrep_no_matches_returns_empty(self):
+        """Exit code 1 with no match lines should produce empty match list."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_ripgrep_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 1
+        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await execute_ripgrep_profile(
+                repo_path="/repo",
+                pattern="missing",
+                timeout_seconds=30,
+            )
+
+        assert result["exit_code"] == 1
+        assert result["total_matches"] == 0
+        assert result["matches"] == []
+
+    @pytest.mark.asyncio
+    async def test_ripgrep_timeout_raises_and_kills_process(self):
+        """Timeout should kill process and raise TimeoutError."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_ripgrep_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.kill = MagicMock()
+
+        async def slow_communicate():
+            await asyncio.sleep(100)
+            return b"", b""
+
+        mock_proc.communicate = slow_communicate
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            with pytest.raises(TimeoutError):
+                await execute_ripgrep_profile(
+                    repo_path="/repo",
+                    pattern="foo",
+                    timeout_seconds=0,
+                )
+
+        mock_proc.kill.assert_called_once()
+        mock_proc.wait.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ripgrep_malformed_json_lines_are_ignored(self):
+        """Malformed JSON lines should not crash parsing."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_ripgrep_profile
+
+        stdout = (
+            b'{"type":"match","data":{"path":{"text":"src/a.py"},"line_number":1,"lines":{"text":"foo\\n"}}}\n'
+            b'{not-json}\n'
+            b'{"type":"match","data":{"path":{"text":"src/b.py"},"line_number":2,"lines":{"text":"bar foo\\n"}}}\n'
+        )
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(stdout, b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await execute_ripgrep_profile(
+                repo_path="/repo",
+                pattern="foo",
+                timeout_seconds=30,
+            )
+
+        assert result["total_matches"] == 2
+        assert len(result["matches"]) == 2

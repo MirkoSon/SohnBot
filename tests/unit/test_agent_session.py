@@ -133,7 +133,7 @@ class TestAgentSession:
                 responses.append(msg)
 
             # Should bind chat_id
-            mock_bind.assert_called_once_with(chat_id="123456789")
+            mock_bind.assert_called_once_with(chat_id="123456789", dry_run=False)
 
     @pytest.mark.asyncio
     async def test_query_streams_response(self, agent_session):
@@ -263,6 +263,43 @@ class TestAgentSession:
 
         send_message.assert_called_once()
         assert responses
+
+    @pytest.mark.asyncio
+    async def test_query_resets_profile_counter_on_new_message(self, agent_session):
+        """Broker profile counter reset should run at each query boundary."""
+        agent_session.client = AsyncMock()
+        agent_session.client.query = AsyncMock()
+
+        async def mock_responses():
+            yield MagicMock(content=[MagicMock(text="ok")])
+
+        agent_session.client.receive_response = mock_responses
+
+        agent_session.broker.reset_profile_counter = MagicMock()
+
+        async for _ in agent_session.query("hello", "123456789"):
+            pass
+
+        agent_session.broker.reset_profile_counter.assert_called_once_with("123456789")
+
+    @pytest.mark.asyncio
+    async def test_query_detects_dryrun_prefix_and_flag(self, agent_session):
+        """Dry-run markers should be stripped and bound in context."""
+        agent_session.client = AsyncMock()
+        agent_session.client.query = AsyncMock()
+
+        async def mock_responses():
+            yield MagicMock(content=[MagicMock(text="ok")])
+
+        agent_session.client.receive_response = mock_responses
+
+        with patch("src.sohnbot.runtime.agent_session.bind_contextvars") as mock_bind:
+            async for _ in agent_session.query("/dryrun lint repo --dry-run", "123456789"):
+                pass
+
+        mock_bind.assert_called_once_with(chat_id="123456789", dry_run=True)
+        queried_prompt = agent_session.client.query.call_args[0][0]
+        assert queried_prompt == "lint repo"
 
     # Cleanup Tests
 

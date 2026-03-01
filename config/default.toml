@@ -79,6 +79,8 @@ build_command = "make"
 build_timeout_seconds = 300
 test_command = "pytest"
 test_timeout_seconds = 600
+ripgrep_command = "rg"
+ripgrep_timeout_seconds = 30
 max_chain_length = 5
 
 [search]

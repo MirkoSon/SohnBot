@@ -66,6 +66,8 @@ class TestRegistry:
             "database.path",
             "logging.level",
             "scheduler.tick_seconds",
+            "commands.ripgrep_command",
+            "commands.ripgrep_timeout_seconds",
         ]
         for key in required_keys:
             assert key in REGISTRY
@@ -148,6 +150,18 @@ class TestValidateConfigValue:
         is_valid, error = validate_config_value("logging.level", "INVALID_LEVEL")
         assert is_valid is False
         assert "Custom validation failed" in error
+
+    def test_validate_ripgrep_command_rejects_metacharacters(self):
+        """ripgrep command validator should reject shell metacharacters."""
+        is_valid, error = validate_config_value("commands.ripgrep_command", "rg; rm -rf /")
+        assert is_valid is False
+        assert "disallowed characters" in error
+
+    def test_validate_ripgrep_timeout_range(self):
+        """ripgrep timeout should enforce 1..300 range."""
+        assert validate_config_value("commands.ripgrep_timeout_seconds", 0)[0] is False
+        assert validate_config_value("commands.ripgrep_timeout_seconds", 301)[0] is False
+        assert validate_config_value("commands.ripgrep_timeout_seconds", 30)[0] is True
 
     def test_validate_nonexistent_key(self):
         """Should reject validation for nonexistent key."""

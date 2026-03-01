@@ -5,6 +5,7 @@ Wrapper for ClaudeSDKClient with SohnBot-specific configuration.
 """
 
 from pathlib import Path
+import inspect
 from typing import Awaitable, Callable
 from uuid import uuid4
 
@@ -86,6 +87,13 @@ class AgentSession:
                 "mcp__sohnbot__sched__enable",
                 "mcp__sohnbot__sched__delete",
                 "mcp__sohnbot__sched__edit",
+                "mcp__sohnbot__profiles__lint",
+                "mcp__sohnbot__profiles__build",
+                "mcp__sohnbot__profiles__test",
+                "mcp__sohnbot__profiles__ripgrep",
+                "mcp__sohnbot__observe__status",
+                "mcp__sohnbot__observe__resources",
+                "mcp__sohnbot__observe__health",
             ],
             hooks={
                 "PreToolUse": [validate_tool_use]
@@ -126,13 +134,30 @@ class AgentSession:
         if not self.client:
             raise RuntimeError("AgentSession not initialized. Call initialize() first.")
 
+        # Reset profile chain counter at request boundary (new user message).
+        if hasattr(self.broker, "reset_profile_counter"):
+            reset_result = self.broker.reset_profile_counter(chat_id)
+            if inspect.isawaitable(reset_result):
+                await reset_result
+
+        # Detect dry-run request styles and strip markers from the prompt.
+        dry_run = False
+        normalized = prompt.strip()
+        if normalized.startswith("/dryrun "):
+            dry_run = True
+            prompt = normalized[8:].strip()
+        if "--dry-run" in prompt:
+            dry_run = True
+            prompt = prompt.replace("--dry-run", "").strip()
+
         # Bind chat_id to context for logging
-        bind_contextvars(chat_id=chat_id)
+        bind_contextvars(chat_id=chat_id, dry_run=dry_run)
 
         logger.info(
             "agent_query_start",
             chat_id=chat_id,
-            prompt_length=len(prompt)
+            prompt_length=len(prompt),
+            dry_run=dry_run,
         )
 
         if not skip_ambiguity_check and send_message and self._is_ambiguous_prompt(prompt):

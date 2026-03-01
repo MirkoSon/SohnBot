@@ -63,11 +63,16 @@ def create_sohnbot_mcp_server(broker, config):
         return str(result)
 
     async def _run_file_tool(action: str, params: dict, chat_id: str) -> dict:
+        dry_run = bool(get_contextvars().get("dry_run", False))
+        route_kwargs = {}
+        if dry_run:
+            route_kwargs["dry_run"] = True
         result = await broker.route_operation(
             capability="fs",
             action=action,
             params=params,
             chat_id=chat_id,
+            **route_kwargs,
         )
 
         if not result.allowed:
@@ -257,6 +262,10 @@ def create_sohnbot_mcp_server(broker, config):
         """Git commit via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
+        dry_run = bool(ctx.get("dry_run", False))
+        route_kwargs = {}
+        if dry_run:
+            route_kwargs["dry_run"] = True
 
         repo_path = args.get("repo_path")
         message = args.get("message")
@@ -278,7 +287,8 @@ def create_sohnbot_mcp_server(broker, config):
                 "file_paths": file_paths,
                 "timeout_seconds": 30,
             },
-            chat_id=chat_id
+            chat_id=chat_id,
+            **route_kwargs,
         )
 
         if not result.allowed:
@@ -599,6 +609,10 @@ def create_sohnbot_mcp_server(broker, config):
         """Run lint profile via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
+        dry_run = bool(ctx.get("dry_run", False))
+        route_kwargs = {}
+        if dry_run:
+            route_kwargs["dry_run"] = True
         repo_path = args.get("repo_path")
         files = args.get("files") or []
         logger.info(
@@ -613,6 +627,7 @@ def create_sohnbot_mcp_server(broker, config):
             action="lint",
             params={"repo_path": repo_path, "files": files},
             chat_id=chat_id,
+            **route_kwargs,
         )
 
         if not result.allowed:
@@ -633,6 +648,10 @@ def create_sohnbot_mcp_server(broker, config):
         """Run build profile via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
+        dry_run = bool(ctx.get("dry_run", False))
+        route_kwargs = {}
+        if dry_run:
+            route_kwargs["dry_run"] = True
         repo_path = args.get("repo_path")
         target = args.get("target") or ""
         logger.info(
@@ -647,6 +666,7 @@ def create_sohnbot_mcp_server(broker, config):
             action="build",
             params={"repo_path": repo_path, "target": target},
             chat_id=chat_id,
+            **route_kwargs,
         )
 
         if not result.allowed:
@@ -667,6 +687,10 @@ def create_sohnbot_mcp_server(broker, config):
         """Run test profile via broker."""
         ctx = get_contextvars()
         chat_id = ctx.get("chat_id", "unknown")
+        dry_run = bool(ctx.get("dry_run", False))
+        route_kwargs = {}
+        if dry_run:
+            route_kwargs["dry_run"] = True
         repo_path = args.get("repo_path")
         pattern = args.get("pattern") or ""
         logger.info(
@@ -682,6 +706,7 @@ def create_sohnbot_mcp_server(broker, config):
             action="test",
             params={"repo_path": repo_path, "pattern": pattern},
             chat_id=chat_id,
+            **route_kwargs,
         )
 
         if not result.allowed:
@@ -696,6 +721,70 @@ def create_sohnbot_mcp_server(broker, config):
         stderr = data.get("stderr", "")
         output = "\n".join(part for part in (stdout, stderr) if part)
         return _as_mcp_text(f"{status} (exit {exit_code})\n{output[:2000]}")
+
+    @tool(
+        "profiles__ripgrep",
+        "Search codebase with ripgrep",
+        {"repo_path": str, "pattern": str, "file_types": list, "timeout_seconds": int},
+    )
+    async def profiles_ripgrep(args):
+        """Run ripgrep profile via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        dry_run = bool(ctx.get("dry_run", False))
+        route_kwargs = {}
+        if dry_run:
+            route_kwargs["dry_run"] = True
+        repo_path = args.get("repo_path")
+        pattern = args.get("pattern")
+        file_types = args.get("file_types")
+        timeout_seconds = args.get("timeout_seconds")
+        logger.info(
+            "mcp_tool_invoked",
+            tool="profiles__ripgrep",
+            repo_path=repo_path,
+            pattern=pattern,
+            chat_id=chat_id,
+        )
+
+        params = {
+            "repo_path": repo_path,
+            "pattern": pattern,
+            "file_types": file_types,
+        }
+        if timeout_seconds is not None:
+            params["timeout_seconds"] = timeout_seconds
+
+        result = await broker.route_operation(
+            capability="profiles",
+            action="ripgrep",
+            params=params,
+            chat_id=chat_id,
+            **route_kwargs,
+        )
+
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="profiles__ripgrep", error=error_msg)
+            return _as_mcp_text(f"❌ Ripgrep denied: {error_msg}")
+
+        data = result.result or {}
+        exit_code = int(data.get("exit_code", -1))
+        total_matches = int(data.get("total_matches", 0))
+        matches = data.get("matches", [])
+
+        if exit_code == 1 and total_matches == 0:
+            return _as_mcp_text(f"No matches found for pattern: {pattern}")
+        if exit_code not in (0, 1):
+            stderr = data.get("stderr", "")
+            return _as_mcp_text(f"⚠️ Ripgrep failed with exit code {exit_code}\n{stderr[:1000]}")
+
+        lines = [f"✅ Found {total_matches} matches for pattern: {pattern}"]
+        for match in matches[:100]:
+            lines.append(f"{match.get('file')}:{match.get('line')}: {match.get('text')}")
+        if total_matches > 100:
+            lines.append(f"... ({total_matches - 100} more matches)")
+        return _as_mcp_text("\n".join(lines))
 
     @tool("observe__status", "Get current system status snapshot", {})
     async def observe_status(args):
@@ -805,6 +894,7 @@ def create_sohnbot_mcp_server(broker, config):
             profiles_lint,
             profiles_build,
             profiles_test,
+            profiles_ripgrep,
             observe_status,
             observe_resources,
             observe_health,

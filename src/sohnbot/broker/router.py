@@ -1,6 +1,7 @@
 """Broker router - central routing and policy enforcement."""
 
 import asyncio
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,6 +29,7 @@ from ..capabilities.scheduler import (
 from .operation_classifier import classify_tier
 from .scope_validator import ScopeValidator
 from ..persistence.audit import log_operation_start, log_operation_end
+from ..persistence.db import get_db
 from ..persistence.notification import (
     enqueue_notification,
     get_notifications_enabled,
@@ -71,6 +73,15 @@ class BrokerRouter:
         self.patch_editor = PatchEditor()
         self.snapshot_manager = SnapshotManager()
         self._operation_start_times: Dict[str, float] = {}
+        self._profile_counts: Dict[str, int] = {}
+
+    def reset_profile_counter(self, chat_id: str) -> None:
+        """Reset profile execution counter for a chat/request boundary."""
+        self._profile_counts.pop(chat_id, None)
+
+    def get_profile_count(self, chat_id: str) -> int:
+        """Get profile execution count for a chat."""
+        return int(self._profile_counts.get(chat_id, 0))
 
     async def route_operation(
         self,
@@ -78,6 +89,7 @@ class BrokerRouter:
         action: str,
         params: Dict[str, Any],
         chat_id: str,
+        dry_run: bool = False,
     ) -> BrokerResult:
         """
         Route operation through broker validation and execution.
@@ -107,6 +119,43 @@ class BrokerRouter:
         # 2. Classify operation tier
         file_count = self._count_files(params)
         tier = classify_tier(capability, action, file_count)
+        if dry_run:
+            tier = 0
+
+        if capability == "profiles":
+            current_count = self._profile_counts.get(chat_id, 0)
+            max_chain_length = 5
+            if self.config_manager:
+                try:
+                    max_chain_length = int(self.config_manager.get("commands.max_chain_length"))
+                except Exception:  # noqa: BLE001
+                    pass
+            if current_count >= max_chain_length:
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "profile_chain_limit_exceeded",
+                        "message": (
+                            f"Profile execution limit reached ({current_count}/{max_chain_length} used). "
+                            "Break request into smaller parts."
+                        ),
+                        "details": {
+                            "current_count": current_count,
+                            "max_chain_length": max_chain_length,
+                        },
+                        "retryable": False,
+                    },
+                )
+            self._profile_counts[chat_id] = current_count + 1
+            logger.info(
+                "profile_counter_incremented",
+                chat_id=chat_id,
+                count=self._profile_counts[chat_id],
+                max_chain_length=max_chain_length,
+            )
 
         # 3. Validate scope (if file operation)
         if capability == "fs":
@@ -408,7 +457,7 @@ class BrokerRouter:
 
         # Profiles capability parameter validation and scope checking
         if capability == "profiles":
-            if action in {"lint", "build", "test"} and "repo_path" not in params:
+            if action in {"lint", "build", "test", "ripgrep"} and "repo_path" not in params:
                 self._operation_start_times.pop(operation_id, None)
                 return BrokerResult(
                     allowed=False,
@@ -504,7 +553,7 @@ class BrokerRouter:
             pattern = params.get("pattern") or ""
             if pattern:
                 from pathlib import PurePosixPath
-                if ".." in PurePosixPath(str(pattern)).parts:
+                if action != "ripgrep" and ".." in PurePosixPath(str(pattern)).parts:
                     self._operation_start_times.pop(operation_id, None)
                     return BrokerResult(
                         allowed=False,
@@ -517,7 +566,7 @@ class BrokerRouter:
                             "retryable": False,
                         },
                     )
-                if not _SAFE_PROFILE_RE.match(pattern):
+                if action != "ripgrep" and not _SAFE_PROFILE_RE.match(pattern):
                     self._operation_start_times.pop(operation_id, None)
                     return BrokerResult(
                         allowed=False,
@@ -530,6 +579,35 @@ class BrokerRouter:
                             "retryable": False,
                         },
                     )
+            if action == "ripgrep":
+                if "pattern" not in params or not isinstance(params.get("pattern"), str) or not params.get("pattern"):
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "Missing or invalid required parameter: pattern",
+                            "details": {"action": action},
+                            "retryable": False,
+                        },
+                    )
+                if "file_types" in params and params.get("file_types") is not None:
+                    file_types = params.get("file_types")
+                    if not isinstance(file_types, list) or not all(isinstance(item, str) for item in file_types):
+                        self._operation_start_times.pop(operation_id, None)
+                        return BrokerResult(
+                            allowed=False,
+                            operation_id=operation_id,
+                            tier=tier,
+                            error={
+                                "code": "invalid_request",
+                                "message": "file_types must be a list of strings",
+                                "details": {"action": action},
+                                "retryable": False,
+                            },
+                        )
 
         # 4. Check limits (e.g., max command profiles per request)
         # TODO: Implement limit checking (Story 1.5+)
@@ -569,9 +647,17 @@ class BrokerRouter:
             )
 
             async with asyncio.timeout(timeout_seconds):
-                result = await self._execute_capability(
-                    capability, action, params, operation_id
-                )
+                if dry_run:
+                    result = await self._execute_dry_run_preview(
+                        capability=capability,
+                        action=action,
+                        params=params,
+                        operation_id=operation_id,
+                    )
+                else:
+                    result = await self._execute_capability(
+                        capability, action, params, operation_id
+                    )
 
             # 7. Log operation end (success)
             duration_ms = self._calculate_duration(operation_id)
@@ -581,6 +667,8 @@ class BrokerRouter:
                 snapshot_ref=snapshot_ref,
                 duration_ms=duration_ms,
             )
+            if dry_run:
+                await self._mark_operation_dry_run(operation_id=operation_id, result=result)
 
             await self._enqueue_operation_notification(
                 operation_id=operation_id,
@@ -974,8 +1062,129 @@ class BrokerRouter:
                     pattern=params.get("pattern") or "",
                     timeout_seconds=int(timeout),
                 )
+            if action == "ripgrep":
+                from ..capabilities.command_profiles import execute_ripgrep_profile
+                command = (
+                    self.config_manager.get("commands.ripgrep_command")
+                    if self.config_manager
+                    else "rg"
+                )
+                timeout = (
+                    self.config_manager.get("commands.ripgrep_timeout_seconds")
+                    if self.config_manager
+                    else 30
+                )
+                return await execute_ripgrep_profile(
+                    repo_path=params["repo_path"],
+                    pattern=params["pattern"],
+                    file_types=params.get("file_types") or None,
+                    timeout_seconds=int(params.get("timeout_seconds") or timeout),
+                    command=str(command),
+                )
 
         return await self._execute_capability_placeholder(capability, action, params, operation_id)
+
+    async def _execute_dry_run_preview(
+        self,
+        capability: str,
+        action: str,
+        params: Dict[str, Any],
+        operation_id: str,
+    ) -> Dict[str, Any]:
+        """Return side-effect-free preview response for supported operations."""
+        _ = operation_id
+        logger.info("dry_run_preview_started", capability=capability, action=action)
+
+        if capability == "fs" and action == "apply_patch":
+            patch_content = str(params.get("patch", ""))
+            hunks = [line for line in patch_content.splitlines() if line.startswith("@@")]
+            return {
+                "preview": True,
+                "operation": "apply_patch",
+                "file": params.get("path"),
+                "patch": patch_content,
+                "hunks_count": len(hunks),
+                "message": f"🔍 DRY RUN - Would apply {len(hunks)} hunks to {params.get('path')}",
+            }
+
+        if capability == "git" and action == "commit":
+            files = params.get("file_paths") or []
+            return {
+                "preview": True,
+                "operation": "git_commit",
+                "message_text": params.get("message"),
+                "files": files,
+                "files_count": len(files),
+                "message": f"🔍 DRY RUN - Would commit {len(files)} file(s)",
+            }
+
+        if capability == "profiles":
+            repo_path = params.get("repo_path", ".")
+            if action == "lint":
+                command = (
+                    self.config_manager.get("commands.lint_command")
+                    if self.config_manager
+                    else "pylint"
+                )
+                cmd_preview = " ".join([str(command), *(params.get("files") or [])]).strip()
+            elif action == "build":
+                command = (
+                    self.config_manager.get("commands.build_command")
+                    if self.config_manager
+                    else "make"
+                )
+                target = params.get("target") or ""
+                cmd_preview = " ".join([str(command), str(target)]).strip()
+            elif action == "test":
+                command = (
+                    self.config_manager.get("commands.test_command")
+                    if self.config_manager
+                    else "pytest"
+                )
+                pattern = params.get("pattern") or ""
+                cmd_preview = " ".join([str(command), str(pattern)]).strip()
+            elif action == "ripgrep":
+                command = (
+                    self.config_manager.get("commands.ripgrep_command")
+                    if self.config_manager
+                    else "rg"
+                )
+                file_types = params.get("file_types") or []
+                type_flags: list[str] = []
+                for file_type in file_types:
+                    type_flags.extend(["-t", str(file_type)])
+                cmd_preview = " ".join([str(command), "--json", *type_flags, str(params.get("pattern") or "")]).strip()
+            else:
+                cmd_preview = f"{action} (preview unavailable)"
+            return {
+                "preview": True,
+                "operation": f"profile_{action}",
+                "command": cmd_preview,
+                "repo_path": repo_path,
+                "message": f"🔍 DRY RUN - Would execute: {cmd_preview}",
+            }
+
+        return {
+            "preview": True,
+            "operation": f"{capability}_{action}",
+            "params": params,
+            "message": f"🔍 DRY RUN - Would execute {capability}.{action}",
+        }
+
+    async def _mark_operation_dry_run(self, operation_id: str, result: Dict[str, Any]) -> None:
+        """Annotate execution_log.details with dry_run flag and preview summary."""
+        db = await get_db()
+        details = {"dry_run": True}
+        if isinstance(result, dict):
+            if "operation" in result:
+                details["preview_operation"] = result.get("operation")
+            if "message" in result:
+                details["preview_message"] = result.get("message")
+        await db.execute(
+            "UPDATE execution_log SET details = ? WHERE operation_id = ?",
+            (json.dumps(details), operation_id),
+        )
+        await db.commit()
 
     def _format_notification_message(
         self,
@@ -1006,6 +1215,16 @@ class BrokerRouter:
             exit_code = data.get("exit_code", "?")
             repo = params.get("repo_path", "-")
             return f"{passed} Test profile | exit_code={exit_code} | repo={repo}"
+
+        if capability == "profiles" and action == "ripgrep" and status == "completed":
+            data = result or {}
+            exit_code = data.get("exit_code", "?")
+            repo = params.get("repo_path", "-")
+            total_matches = data.get("total_matches", 0)
+            return (
+                f"✅ Ripgrep profile | exit_code={exit_code} | "
+                f"matches={total_matches} | repo={repo}"
+            )
 
         if capability == "git" and action == "commit" and status == "completed":
             data = result or {}

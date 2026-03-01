@@ -238,6 +238,25 @@ class TestMCPTools:
         assert "profiles__test" in by_name
         assert by_name["profiles__test"].input_schema == {"repo_path": str, "pattern": str}
 
+    def test_profiles_ripgrep_tool_registered_with_expected_schema(self, mock_broker, mock_config):
+        """profiles__ripgrep tool is registered with correct schema."""
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+
+        assert "profiles__ripgrep" in by_name
+        assert by_name["profiles__ripgrep"].input_schema == {
+            "repo_path": str,
+            "pattern": str,
+            "file_types": list,
+            "timeout_seconds": int,
+        }
+
     @pytest.mark.asyncio
     async def test_profiles_test_routes_through_broker(self, mock_broker, mock_config):
         """profiles__test invokes broker.route_operation with correct capability/action."""
@@ -294,6 +313,69 @@ class TestMCPTools:
 
         content = result["content"][0]["text"]
         assert "❌ Test denied" in content
+        assert "scope_violation" in content
+
+    @pytest.mark.asyncio
+    async def test_profiles_ripgrep_routes_through_broker(self, mock_broker, mock_config):
+        """profiles__ripgrep invokes broker.route_operation with correct params."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=True,
+            error=None,
+            result={
+                "matches": [{"file": "a.py", "line": 1, "text": "foo"}],
+                "total_matches": 1,
+                "exit_code": 0,
+            },
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        ripgrep_tool = by_name["profiles__ripgrep"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await ripgrep_tool.handler(
+                {"repo_path": "/some/project", "pattern": "foo", "file_types": ["py"], "timeout_seconds": 5}
+            )
+
+        mock_broker.route_operation.assert_called_once_with(
+            capability="profiles",
+            action="ripgrep",
+            params={"repo_path": "/some/project", "pattern": "foo", "file_types": ["py"], "timeout_seconds": 5},
+            chat_id="test_chat",
+        )
+        content = result["content"][0]["text"]
+        assert "Found 1 matches" in content
+
+    @pytest.mark.asyncio
+    async def test_profiles_ripgrep_denied_returns_error_message(self, mock_broker, mock_config):
+        """profiles__ripgrep denied by broker returns error text."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=False,
+            error={"message": "scope_violation: path outside roots"},
+            result=None,
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        ripgrep_tool = by_name["profiles__ripgrep"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await ripgrep_tool.handler({"repo_path": "/bad/path", "pattern": "foo"})
+
+        content = result["content"][0]["text"]
+        assert "❌ Ripgrep denied" in content
         assert "scope_violation" in content
 
 
@@ -379,6 +461,7 @@ class TestPreToolUseHook:
             "mcp__sohnbot__profiles__lint",
             "mcp__sohnbot__profiles__build",
             "mcp__sohnbot__profiles__test",
+            "mcp__sohnbot__profiles__ripgrep",
         ]
 
         for tool_name in tool_names:
