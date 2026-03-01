@@ -72,6 +72,7 @@ timezone = "UTC"
 
 [commands]
 # Command profile timeouts (DYNAMIC - hot-reloadable)
+lint_command = "pylint"
 lint_timeout_seconds = 60
 build_timeout_seconds = 300
 test_timeout_seconds = 600

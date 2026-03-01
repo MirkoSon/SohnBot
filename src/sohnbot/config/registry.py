@@ -21,6 +21,23 @@ def _validate_localhost_host(value: str) -> bool:
     return True
 
 
+import re as _re
+
+_SAFE_COMMAND_RE = _re.compile(r'^[a-zA-Z0-9_./-][\w ./_-]*$')
+
+
+def _validate_lint_command(value: str) -> bool:
+    """Reject empty strings and shell metacharacters in lint command."""
+    if not value or not value.strip():
+        raise ValueError("lint_command must not be empty")
+    if not _SAFE_COMMAND_RE.match(value):
+        raise ValueError(
+            "lint_command contains disallowed characters; "
+            "use alphanumeric, spaces, dashes, underscores, dots, and slashes only"
+        )
+    return True
+
+
 @dataclass
 class ConfigKey:
     """Defines a single configuration key with validation and tier classification.
@@ -192,6 +209,12 @@ REGISTRY: dict[str, ConfigKey] = {
     ),
 
     # ===== COMMAND PROFILES (Dynamic - Timeout tuning) =====
+    "commands.lint_command": ConfigKey(
+        tier="dynamic",
+        value_type=str,
+        default="pylint",
+        validator=_validate_lint_command,
+    ),
     "commands.lint_timeout_seconds": ConfigKey(
         tier="dynamic",
         value_type=int,

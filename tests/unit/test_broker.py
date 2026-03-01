@@ -301,3 +301,127 @@ async def test_route_operation_error_handling(mock_log_end, mock_log_start, tmp_
         assert result.allowed is False
         assert result.error["code"] == "execution_error"
         assert "Test error" in result.error["message"]
+
+
+# Profiles Capability Broker Tests
+
+@pytest.mark.asyncio
+async def test_profiles_lint_missing_repo_path_returns_invalid_request(tmp_path):
+    """profiles/lint without repo_path → allowed=False, code=invalid_request."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="lint",
+        params={},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "repo_path" in result.error["message"]
+
+
+@pytest.mark.asyncio
+async def test_profiles_lint_empty_repo_path_returns_invalid_request(tmp_path):
+    """profiles/lint with repo_path='' → allowed=False, code=invalid_request."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="lint",
+        params={"repo_path": ""},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_profiles_lint_out_of_scope_repo_path_returns_scope_violation(tmp_path):
+    """profiles/lint with repo_path outside scope → allowed=False, code=scope_violation."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    outside_path = str(tmp_path / "other_project")
+
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="lint",
+        params={"repo_path": outside_path},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "scope_violation"
+
+
+@pytest.mark.asyncio
+async def test_profiles_lint_files_with_traversal_returns_scope_violation(tmp_path):
+    """profiles/lint with '../' in files list → allowed=False, code=scope_violation."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    repo_path = str(allowed_root)
+
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="lint",
+        params={"repo_path": repo_path, "files": ["../secret.py"]},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "scope_violation"
+    assert "traversal" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_lint_success_routes_to_capability(mock_log_end, mock_log_start, tmp_path):
+    """profiles/lint with valid params routes to execute_lint_profile and returns result."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    repo_path = str(allowed_root)
+
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    fake_lint_result = {
+        "passed": True,
+        "exit_code": 0,
+        "stdout": "All clean.",
+        "stderr": "",
+        "command_used": "pylint",
+        "files_linted": [],
+    }
+
+    with patch(
+        "src.sohnbot.capabilities.command_profiles.execute_lint_profile",
+        new=AsyncMock(return_value=fake_lint_result),
+    ) as mock_exec:
+        result = await router.route_operation(
+            capability="profiles",
+            action="lint",
+            params={"repo_path": repo_path, "files": []},
+            chat_id="test_chat",
+        )
+
+    assert result.allowed is True
+    assert result.result["passed"] is True
+    assert result.result["exit_code"] == 0
+    assert result.snapshot_ref is None  # Tier 0 — no snapshot
