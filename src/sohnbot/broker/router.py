@@ -502,19 +502,34 @@ class BrokerRouter:
                     )
 
             pattern = params.get("pattern") or ""
-            if pattern and not _SAFE_PROFILE_RE.match(pattern):
-                self._operation_start_times.pop(operation_id, None)
-                return BrokerResult(
-                    allowed=False,
-                    operation_id=operation_id,
-                    tier=tier,
-                    error={
-                        "code": "invalid_request",
-                        "message": "pattern contains disallowed characters",
-                        "details": {"pattern": pattern},
-                        "retryable": False,
-                    },
-                )
+            if pattern:
+                from pathlib import PurePosixPath
+                if ".." in PurePosixPath(str(pattern)).parts:
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "scope_violation",
+                            "message": f"pattern contains path traversal: {pattern}",
+                            "details": {"pattern": pattern},
+                            "retryable": False,
+                        },
+                    )
+                if not _SAFE_PROFILE_RE.match(pattern):
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "pattern contains disallowed characters",
+                            "details": {"pattern": pattern},
+                            "retryable": False,
+                        },
+                    )
 
         # 4. Check limits (e.g., max command profiles per request)
         # TODO: Implement limit checking (Story 1.5+)

@@ -1,4 +1,4 @@
-"""Command profile executor — runs linter, build (and future profiles) as subprocesses."""
+"""Command profile executor — runs linter, build, test (and future profiles) as subprocesses."""
 
 import asyncio
 import structlog
@@ -196,9 +196,10 @@ async def execute_test_profile(
         repo_path: Working directory for the subprocess (project root).
         command: Test command string, e.g. "pytest" or "cargo test".
                  Multi-word strings are split on whitespace.
-        pattern: Optional test file or pattern appended after the command
-                 (e.g. "tests/unit/", "test_broker.py", "-k auth").
-                 Empty string means no explicit pattern (run full suite).
+        pattern: Optional single test path or expression appended after the command
+                 (e.g. "tests/unit/", "test_broker.py"). Passed as one argument;
+                 multi-word pytest flags like "-k expr" require splitting into
+                 separate invocations. Empty string runs the full suite.
         timeout_seconds: Hard kill timeout in seconds (default 600).
 
     Returns:

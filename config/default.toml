@@ -40,7 +40,8 @@ response_timeout_seconds = 30
 
 [broker]
 # Broker operation timeouts (DYNAMIC - hot-reloadable)
-operation_timeout_seconds = 300
+# Must exceed the longest profile timeout (test_timeout_seconds = 600)
+operation_timeout_seconds = 700
 
 [files]
 # File operation limits (DYNAMIC - hot-reloadable)

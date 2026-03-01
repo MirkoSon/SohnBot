@@ -1,6 +1,6 @@
 # Story 5.3: Run Tests Profile
 
-Status: review
+Status: done
 
 ## Story
 
@@ -444,9 +444,6 @@ claude-sonnet-4-6
 
 ### Completion Notes List
 
-### File List
-### Completion Notes List
-
 - Implemented `execute_test_profile` in `profile_executor.py` following the exact same pattern as `execute_build_profile`. Uses `asyncio.create_subprocess_exec` (no shell injection risk), `asyncio.timeout()` for 600s hard kill, zombie-process prevention via `await proc.wait()` after `proc.kill()`, and `asyncio.CancelledError` handler with `asyncio.shield(proc.wait())`.
 - Added `_validate_test_command` security validator and `"commands.test_command"` ConfigKey to registry. `test_timeout_seconds` was already present — not duplicated.
 - Added `test_command = "pytest"` to `config/default.toml` under `[commands]`. `test_timeout_seconds = 600` was already present.
@@ -457,6 +454,7 @@ claude-sonnet-4-6
 - Added `profiles__test` MCP tool in `mcp_tools.py` with combined stdout+stderr output (2000 char truncation), registered in tools list.
 - Added 18 new tests: 7 in `TestExecuteTestProfile` (success, failure, timeout, no-pattern, with-pattern, cwd, cancellation), 3 MCP tool tests (schema, routing, denial), 8 broker tests (tier classification, 5 validation, 2 notification formatter). All 76 tests in the 3 affected test files pass.
 - Pre-existing failures confirmed NOT introduced by this story: `test_config_manager.py::test_static_config_validation` (regex mismatch) and `test_health_checks.py::test_check_sqlite_writable_warns_if_not_wal` (sqlite WAL transaction issue).
+- **Code review fixes (claude-sonnet-4-6):** M1: Raised `broker.operation_timeout_seconds` default from 300→700 so test profile's 600s timeout fires first (registry.py + default.toml). M2: Added `..` path traversal detection for `pattern` parameter in router.py (scope_violation) consistent with `files` validation; added `test_profiles_test_pattern_with_traversal_returns_scope_violation` test. M3: Fixed misleading `"-k auth"` docstring example in `execute_test_profile` — clarified pattern is a single argument. L1: Updated stale module docstring to include "test". L2: Added `pattern` field to `mcp_tool_invoked` logger call. L3: Removed duplicate `### Completion Notes List` and `### File List` template stubs.
 
 ### File List
 

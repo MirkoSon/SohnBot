@@ -658,6 +658,28 @@ async def test_profiles_test_out_of_scope_repo_path_returns_scope_violation(mock
 @pytest.mark.asyncio
 @patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
 @patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_test_pattern_with_traversal_returns_scope_violation(mock_log_end, mock_log_start, tmp_path):
+    """profiles/test with path traversal in pattern → allowed=False, code=scope_violation."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="test",
+        params={"repo_path": str(allowed_root), "pattern": "../../outside/test_secrets.py"},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "scope_violation"
+    assert "traversal" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
 async def test_profiles_test_unsafe_pattern_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
     """profiles/test with shell metacharacters in pattern → allowed=False, code=invalid_request."""
     allowed_root = tmp_path / "projects"

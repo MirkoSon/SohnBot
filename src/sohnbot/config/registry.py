@@ -155,7 +155,7 @@ REGISTRY: dict[str, ConfigKey] = {
     "broker.operation_timeout_seconds": ConfigKey(
         tier="dynamic",
         value_type=int,
-        default=300,
+        default=700,
         min_value=10,
         max_value=3600,
     ),

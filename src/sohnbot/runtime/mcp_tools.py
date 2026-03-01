@@ -673,6 +673,7 @@ def create_sohnbot_mcp_server(broker, config):
             "mcp_tool_invoked",
             tool="profiles__test",
             repo_path=repo_path,
+            pattern=pattern,
             chat_id=chat_id,
         )
 
