@@ -407,7 +407,7 @@ class BrokerRouter:
 
         # Profiles capability parameter validation and scope checking
         if capability == "profiles":
-            if action == "lint" and "repo_path" not in params:
+            if action in {"lint", "build"} and "repo_path" not in params:
                 self._operation_start_times.pop(operation_id, None)
                 return BrokerResult(
                     allowed=False,
@@ -480,6 +480,24 @@ class BrokerRouter:
                             "code": "scope_violation",
                             "message": f"files entry contains path traversal: {f}",
                             "details": {"file": str(f)},
+                            "retryable": False,
+                        },
+                    )
+
+            target = params.get("target") or ""
+            if target:
+                import re as _re
+                _safe_target_re = _re.compile(r'^[a-zA-Z0-9_./-][\w ./_-]*$')
+                if not _safe_target_re.match(target):
+                    self._operation_start_times.pop(operation_id, None)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "target contains disallowed characters",
+                            "details": {"target": target},
                             "retryable": False,
                         },
                     )
@@ -891,6 +909,24 @@ class BrokerRouter:
                     files=params.get("files") or [],
                     timeout_seconds=int(timeout),
                 )
+            if action == "build":
+                from ..capabilities.command_profiles import execute_build_profile
+                command = (
+                    self.config_manager.get("commands.build_command")
+                    if self.config_manager
+                    else "make"
+                )
+                timeout = (
+                    self.config_manager.get("commands.build_timeout_seconds")
+                    if self.config_manager
+                    else 300
+                )
+                return await execute_build_profile(
+                    repo_path=params["repo_path"],
+                    command=command,
+                    target=params.get("target") or "",
+                    timeout_seconds=int(timeout),
+                )
 
         return await self._execute_capability_placeholder(capability, action, params, operation_id)
 
@@ -909,6 +945,13 @@ class BrokerRouter:
             exit_code = data.get("exit_code", "?")
             repo = params.get("repo_path", "-")
             return f"{passed} Lint profile | exit_code={exit_code} | repo={repo}"
+
+        if capability == "profiles" and action == "build" and status == "completed":
+            data = result or {}
+            passed = "✅ PASSED" if data.get("passed") else "❌ FAILED"
+            exit_code = data.get("exit_code", "?")
+            repo = params.get("repo_path", "-")
+            return f"{passed} Build profile | exit_code={exit_code} | repo={repo}"
 
         if capability == "git" and action == "commit" and status == "completed":
             data = result or {}

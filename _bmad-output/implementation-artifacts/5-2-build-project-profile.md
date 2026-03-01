@@ -1,6 +1,6 @@
 # Story 5.2: Build Project Profile
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -37,46 +37,46 @@ so that I can verify builds succeed before committing.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `execute_build_profile` to capability module (AC: 1, 2)
-  - [ ] 1.1 Add `execute_build_profile(repo_path, command, target, timeout_seconds)` to `src/sohnbot/capabilities/command_profiles/profile_executor.py` — follow the same `asyncio.create_subprocess_exec` pattern as `execute_lint_profile`, but accept an optional `target: str` instead of `files: list`
-  - [ ] 1.2 Return structured dict: `{passed, exit_code, stdout, stderr, command_used, target}`
-  - [ ] 1.3 Implement 300s timeout using `asyncio.timeout()`, kill + `await proc.wait()` on timeout (no zombie processes — same fix as Story 5.1 H1)
-  - [ ] 1.4 Export `execute_build_profile` from `src/sohnbot/capabilities/command_profiles/__init__.py`
+- [x] Task 1: Add `execute_build_profile` to capability module (AC: 1, 2)
+  - [x] 1.1 Add `execute_build_profile(repo_path, command, target, timeout_seconds)` to `src/sohnbot/capabilities/command_profiles/profile_executor.py` — follow the same `asyncio.create_subprocess_exec` pattern as `execute_lint_profile`, but accept an optional `target: str` instead of `files: list`
+  - [x] 1.2 Return structured dict: `{passed, exit_code, stdout, stderr, command_used, target}`
+  - [x] 1.3 Implement 300s timeout using `asyncio.timeout()`, kill + `await proc.wait()` on timeout (no zombie processes — same fix as Story 5.1 H1)
+  - [x] 1.4 Export `execute_build_profile` from `src/sohnbot/capabilities/command_profiles/__init__.py`
 
-- [ ] Task 2: Add config keys for build command (AC: 1)
-  - [ ] 2.1 Add `_validate_build_command(value: str) -> bool` validator function to `src/sohnbot/config/registry.py` — same metacharacter rejection logic as `_validate_lint_command` (reuse `_SAFE_COMMAND_RE`)
-  - [ ] 2.2 Add `"commands.build_command"` ConfigKey to `REGISTRY` in `src/sohnbot/config/registry.py` (dynamic, str, default `"make"`, validator=`_validate_build_command`)
-  - [ ] 2.3 Add `build_command = "make"` under `[commands]` section in `config/default.toml` (after `lint_timeout_seconds`, before `build_timeout_seconds`)
+- [x] Task 2: Add config keys for build command (AC: 1)
+  - [x] 2.1 Add `_validate_build_command(value: str) -> bool` validator function to `src/sohnbot/config/registry.py` — same metacharacter rejection logic as `_validate_lint_command` (reuse `_SAFE_COMMAND_RE`)
+  - [x] 2.2 Add `"commands.build_command"` ConfigKey to `REGISTRY` in `src/sohnbot/config/registry.py` (dynamic, str, default `"make"`, validator=`_validate_build_command`)
+  - [x] 2.3 Add `build_command = "make"` under `[commands]` section in `config/default.toml` (after `lint_timeout_seconds`, before `build_timeout_seconds`)
 
-- [ ] Task 3: Add `("profiles", "build")` to Tier 0 in operation classifier (AC: 3)
-  - [ ] 3.1 Add `("profiles", "build"),  # Read-only execution` to `READ_ONLY_ACTIONS` set in `src/sohnbot/broker/operation_classifier.py` (after `("profiles", "lint")`)
+- [x] Task 3: Add `("profiles", "build")` to Tier 0 in operation classifier (AC: 3)
+  - [x] 3.1 Add `("profiles", "build"),  # Read-only execution` to `READ_ONLY_ACTIONS` set in `src/sohnbot/broker/operation_classifier.py` (after `("profiles", "lint")`)
 
-- [ ] Task 4: Extend profiles validation in Broker Router (AC: 5, 6)
-  - [ ] 4.1 In `src/sohnbot/broker/router.py`, extend the `if capability == "profiles":` validation block (around line 409): change `if action == "lint" and "repo_path" not in params:` to also cover `action == "build"` (use `if action in {"lint", "build"} and "repo_path" not in params:`)
-  - [ ] 4.2 After scope validation, add a `target` validation block: if `params.get("target")` is not None or empty, validate it with `_SAFE_COMMAND_RE` (import at top of method or inline); reject with `invalid_request` if unsafe characters detected
+- [x] Task 4: Extend profiles validation in Broker Router (AC: 5, 6)
+  - [x] 4.1 In `src/sohnbot/broker/router.py`, extend the `if capability == "profiles":` validation block (around line 409): change `if action == "lint" and "repo_path" not in params:` to also cover `action == "build"` (use `if action in {"lint", "build"} and "repo_path" not in params:`)
+  - [x] 4.2 After scope validation, add a `target` validation block: if `params.get("target")` is not None or empty, validate it with `_SAFE_COMMAND_RE` (import at top of method or inline); reject with `invalid_request` if unsafe characters detected
 
-- [ ] Task 5: Wire `profiles/build` into Broker `_execute_capability` (AC: 1, 2, 3)
-  - [ ] 5.1 In `src/sohnbot/broker/router.py`, inside the `if capability == "profiles":` block in `_execute_capability()`, add an `if action == "build":` branch after the existing `if action == "lint":` branch
-  - [ ] 5.2 Import `execute_build_profile` from `..capabilities.command_profiles`
-  - [ ] 5.3 Pull `commands.build_command` and `commands.build_timeout_seconds` from `config_manager.get()` (with `"make"` and `300` as fallbacks)
-  - [ ] 5.4 Call `execute_build_profile(repo_path=..., command=..., target=..., timeout_seconds=int(timeout))`
+- [x] Task 5: Wire `profiles/build` into Broker `_execute_capability` (AC: 1, 2, 3)
+  - [x] 5.1 In `src/sohnbot/broker/router.py`, inside the `if capability == "profiles":` block in `_execute_capability()`, add an `if action == "build":` branch after the existing `if action == "lint":` branch
+  - [x] 5.2 Import `execute_build_profile` from `..capabilities.command_profiles`
+  - [x] 5.3 Pull `commands.build_command` and `commands.build_timeout_seconds` from `config_manager.get()` (with `"make"` and `300` as fallbacks)
+  - [x] 5.4 Call `execute_build_profile(repo_path=..., command=..., target=..., timeout_seconds=int(timeout))`
 
-- [ ] Task 6: Extend notification formatter for build profile (AC: 4)
-  - [ ] 6.1 In `src/sohnbot/broker/router.py`, add `elif capability == "profiles" and action == "build" and status == "completed":` case in `_format_notification_message()` (immediately after the existing lint case)
-  - [ ] 6.2 Format: `"✅ PASSED Build profile | exit_code=0 | repo=..."` or `"❌ FAILED Build profile | exit_code=1 | repo=..."`
+- [x] Task 6: Extend notification formatter for build profile (AC: 4)
+  - [x] 6.1 In `src/sohnbot/broker/router.py`, add `elif capability == "profiles" and action == "build" and status == "completed":` case in `_format_notification_message()` (immediately after the existing lint case)
+  - [x] 6.2 Format: `"✅ PASSED Build profile | exit_code=0 | repo=..."` or `"❌ FAILED Build profile | exit_code=1 | repo=..."`
 
-- [ ] Task 7: Implement `profiles__build` MCP tool (AC: 1, 5)
-  - [ ] 7.1 Add `@tool("profiles__build", "Run project build command", {"repo_path": str, "target": str})` in `src/sohnbot/runtime/mcp_tools.py` immediately after the `profiles__lint` tool definition
-  - [ ] 7.2 Accept params: `repo_path: str`, `target: str` (optional, empty = no explicit target)
-  - [ ] 7.3 Route through `broker.route_operation(capability="profiles", action="build", params=..., chat_id=chat_id)`
-  - [ ] 7.4 On success: return `"{status} (exit {exit_code})\n{stdout+stderr combined, truncated to 2000 chars}"` — same combined output pattern as `profiles__lint` (Story 5.1 M1 fix)
-  - [ ] 7.5 Register `profiles_build` in the `tools=[...]` list immediately after `profiles_lint`
+- [x] Task 7: Implement `profiles__build` MCP tool (AC: 1, 5)
+  - [x] 7.1 Add `@tool("profiles__build", "Run project build command", {"repo_path": str, "target": str})` in `src/sohnbot/runtime/mcp_tools.py` immediately after the `profiles__lint` tool definition
+  - [x] 7.2 Accept params: `repo_path: str`, `target: str` (optional, empty = no explicit target)
+  - [x] 7.3 Route through `broker.route_operation(capability="profiles", action="build", params=..., chat_id=chat_id)`
+  - [x] 7.4 On success: return `"{status} (exit {exit_code})\n{stdout+stderr combined, truncated to 2000 chars}"` — same combined output pattern as `profiles__lint` (Story 5.1 M1 fix)
+  - [x] 7.5 Register `profiles_build` in the `tools=[...]` list immediately after `profiles_lint`
 
-- [ ] Task 8: Tests (AC: 1, 2, 3, 4, 5, 6)
-  - [ ] 8.1 Add `execute_build_profile` unit tests in `tests/unit/test_profile_executor.py` — success, failure, timeout (assert `await proc.wait()` called on timeout), optional target included in command
-  - [ ] 8.2 Add `profiles__build` tests in `tests/unit/test_mcp_tools.py` — mock broker, verify tool schema and routing, test with and without target
-  - [ ] 8.3 Add broker tests in `tests/unit/test_broker.py` — missing repo_path, empty repo_path, out-of-scope repo_path, unsafe target, and success routing for `("profiles", "build")`
-  - [ ] 8.4 Add `classify_tier("profiles", "build", 0) == 0` test in `tests/unit/test_broker.py`
+- [x] Task 8: Tests (AC: 1, 2, 3, 4, 5, 6)
+  - [x] 8.1 Add `execute_build_profile` unit tests in `tests/unit/test_profile_executor.py` — success, failure, timeout (assert `await proc.wait()` called on timeout), optional target included in command
+  - [x] 8.2 Add `profiles__build` tests in `tests/unit/test_mcp_tools.py` — mock broker, verify tool schema and routing, test with and without target
+  - [x] 8.3 Add broker tests in `tests/unit/test_broker.py` — missing repo_path, empty repo_path, out-of-scope repo_path, unsafe target, and success routing for `("profiles", "build")`
+  - [x] 8.4 Add `classify_tier("profiles", "build", 0) == 0` test in `tests/unit/test_broker.py`
 
 ## Dev Notes
 
@@ -414,4 +414,32 @@ claude-sonnet-4-6
 
 ### Completion Notes List
 
+- Implemented `execute_build_profile` using `asyncio.create_subprocess_exec` (not `shell=True`) with `asyncio.timeout()` for hard kill on timeout
+- `await proc.wait()` called after `proc.kill()` to prevent zombie processes (Story 5.1 H1 lesson carried forward)
+- `commands.build_command` (dynamic, default `"make"`) added to registry with `_validate_build_command` security validator (Story 5.1 H2 lesson carried forward)
+- `commands.build_timeout_seconds` was already in registry (default 300) and default.toml — no change needed
+- `("profiles", "build")` added to `READ_ONLY_ACTIONS` in operation_classifier.py — Tier 0 (no snapshot)
+- Broker router extended: `action in {"lint", "build"}` for missing repo_path check; `target` validated against `_SAFE_COMMAND_RE` inline (Story 5.1 H3 lesson adapted for target string)
+- `profiles/build` `_execute_capability` block added after lint block with lazy import of `execute_build_profile`
+- `_format_notification_message` extended with profiles/build case: `"✅ PASSED Build profile | exit_code=... | repo=..."`
+- `profiles__build` MCP tool registered with `{"repo_path": str, "target": str}` schema; stdout+stderr combined in response (Story 5.1 M1 lesson)
+- 7 new unit tests in `test_profile_executor.py` for `TestExecuteBuildProfile`
+- 3 new tests in `test_mcp_tools.py` for `profiles__build` (schema, routing, denial)
+- 6 new broker tests in `test_broker.py` (Tier 0 classification, missing/empty repo_path, out-of-scope, unsafe target, success routing)
+- `mcp__sohnbot__profiles__build` added to allowed tools list in `test_mcp_tools.py`
+- Pre-existing failing test `test_config_manager.py::test_static_config_validation` (regex mismatch) confirmed pre-existing, NOT introduced by this story
+- Final test run: 80 passed, 1 skipped, 1 pre-existing failure — all 80 passing tests green
+
 ### File List
+
+- `src/sohnbot/capabilities/command_profiles/profile_executor.py` (modified — added `execute_build_profile` function)
+- `src/sohnbot/capabilities/command_profiles/__init__.py` (modified — added `execute_build_profile` to imports and `__all__`)
+- `src/sohnbot/broker/operation_classifier.py` (modified — added `("profiles", "build")` to `READ_ONLY_ACTIONS`)
+- `src/sohnbot/broker/router.py` (modified — extended profiles validation block, added profiles/build `_execute_capability` branch, added build case in `_format_notification_message`)
+- `src/sohnbot/runtime/mcp_tools.py` (modified — added `profiles__build` tool + registered in tools list)
+- `src/sohnbot/config/registry.py` (modified — added `_validate_build_command` validator and `commands.build_command` ConfigKey)
+- `config/default.toml` (modified — added `build_command = "make"` under `[commands]`)
+- `tests/unit/test_profile_executor.py` (modified — added `TestExecuteBuildProfile` class with 7 tests)
+- `tests/unit/test_mcp_tools.py` (modified — added 3 `profiles__build` tests; added `mcp__sohnbot__profiles__build` to allowed tools list)
+- `tests/unit/test_broker.py` (modified — added Tier 0 classification test inline; added 5 broker integration tests for profiles/build)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified — story status updated)

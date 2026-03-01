@@ -628,6 +628,40 @@ def create_sohnbot_mcp_server(broker, config):
         output = "\n".join(part for part in (stdout, stderr) if part)
         return _as_mcp_text(f"{status} (exit {exit_code})\n{output[:2000]}")
 
+    @tool("profiles__build", "Run project build command", {"repo_path": str, "target": str})
+    async def profiles_build(args):
+        """Run build profile via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        repo_path = args.get("repo_path")
+        target = args.get("target") or ""
+        logger.info(
+            "mcp_tool_invoked",
+            tool="profiles__build",
+            repo_path=repo_path,
+            chat_id=chat_id,
+        )
+
+        result = await broker.route_operation(
+            capability="profiles",
+            action="build",
+            params={"repo_path": repo_path, "target": target},
+            chat_id=chat_id,
+        )
+
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="profiles__build", error=error_msg)
+            return _as_mcp_text(f"❌ Build denied: {error_msg}")
+
+        data = result.result or {}
+        status = "✅ PASSED" if data.get("passed") else "❌ FAILED"
+        exit_code = data.get("exit_code", "?")
+        stdout = data.get("stdout", "")
+        stderr = data.get("stderr", "")
+        output = "\n".join(part for part in (stdout, stderr) if part)
+        return _as_mcp_text(f"{status} (exit {exit_code})\n{output[:2000]}")
+
     @tool("observe__status", "Get current system status snapshot", {})
     async def observe_status(args):
         """Read latest status snapshot from in-memory observability cache."""
@@ -734,6 +768,7 @@ def create_sohnbot_mcp_server(broker, config):
             sched_delete,
             sched_edit,
             profiles_lint,
+            profiles_build,
             observe_status,
             observe_resources,
             observe_health,

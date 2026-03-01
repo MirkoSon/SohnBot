@@ -96,6 +96,7 @@ def test_classify_tier_0_read_operations():
     assert classify_tier("scheduler", "list", 0) == 0
     assert classify_tier("web", "search", 0) == 0
     assert classify_tier("profiles", "lint", 0) == 0
+    assert classify_tier("profiles", "build", 0) == 0
 
 
 def test_classify_tier_1_single_file():
@@ -418,6 +419,133 @@ async def test_profiles_lint_success_routes_to_capability(mock_log_end, mock_log
             capability="profiles",
             action="lint",
             params={"repo_path": repo_path, "files": []},
+            chat_id="test_chat",
+        )
+
+    assert result.allowed is True
+    assert result.result["passed"] is True
+    assert result.result["exit_code"] == 0
+    assert result.snapshot_ref is None  # Tier 0 — no snapshot
+
+
+# ─── profiles/build broker tests ────────────────────────────────────────────
+
+def test_classify_tier_profiles_build_is_tier_0():
+    """profiles/build must be classified as Tier 0 (read-only execution)."""
+    assert classify_tier("profiles", "build", 0) == 0
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_build_missing_repo_path_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    """profiles/build without repo_path → allowed=False, code=invalid_request."""
+    validator = ScopeValidator([str(tmp_path)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="build",
+        params={"target": "dist"},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_build_empty_repo_path_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    """profiles/build with repo_path='' → allowed=False, code=invalid_request."""
+    validator = ScopeValidator([str(tmp_path)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="build",
+        params={"repo_path": "", "target": ""},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "empty" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_build_out_of_scope_repo_path_returns_scope_violation(mock_log_end, mock_log_start, tmp_path):
+    """profiles/build with repo_path outside scope → allowed=False, code=scope_violation."""
+    allowed_root = tmp_path / "allowed"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="build",
+        params={"repo_path": "/outside/path", "target": ""},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "scope_violation"
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_build_unsafe_target_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    """profiles/build with shell metacharacters in target → allowed=False, code=invalid_request."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="profiles",
+        action="build",
+        params={"repo_path": str(allowed_root), "target": "dist; rm -rf /"},
+        chat_id="test_chat",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "disallowed" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profiles_build_success_routes_to_capability(mock_log_end, mock_log_start, tmp_path):
+    """profiles/build with valid params routes to execute_build_profile and returns result."""
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    repo_path = str(allowed_root)
+
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    fake_build_result = {
+        "passed": True,
+        "exit_code": 0,
+        "stdout": "Build complete.",
+        "stderr": "",
+        "command_used": "make",
+        "target": "dist",
+    }
+
+    with patch(
+        "src.sohnbot.capabilities.command_profiles.execute_build_profile",
+        new=AsyncMock(return_value=fake_build_result),
+    ):
+        result = await router.route_operation(
+            capability="profiles",
+            action="build",
+            params={"repo_path": repo_path, "target": "dist"},
             chat_id="test_chat",
         )
 
