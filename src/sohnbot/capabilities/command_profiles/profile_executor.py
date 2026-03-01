@@ -65,6 +65,15 @@ async def execute_lint_profile(
         )
         raise
 
+    except asyncio.CancelledError:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            try:
+                await asyncio.shield(proc.wait())
+            except asyncio.CancelledError:
+                pass
+        raise
+
     exit_code = proc.returncode
     passed = exit_code == 0
 
@@ -144,6 +153,15 @@ async def execute_build_profile(
             repo_path=repo_path,
             timeout_seconds=timeout_seconds,
         )
+        raise
+
+    except asyncio.CancelledError:
+        if proc is not None and proc.returncode is None:
+            proc.kill()
+            try:
+                await asyncio.shield(proc.wait())
+            except asyncio.CancelledError:
+                pass
         raise
 
     exit_code = proc.returncode

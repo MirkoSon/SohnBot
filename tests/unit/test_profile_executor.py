@@ -319,3 +319,79 @@ class TestExecuteBuildProfile:
 
         kwargs = mock_exec.call_args[1]
         assert kwargs["cwd"] == "/some/project"
+
+    @pytest.mark.asyncio
+    async def test_build_cancellation_kills_process(self):
+        """CancelledError while running subprocess kills and waits the process (no zombie)."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_build_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.kill = MagicMock()
+        mock_proc.returncode = None  # Process still running
+
+        async def blocking_communicate():
+            await asyncio.sleep(100)
+            return b"", b""
+
+        mock_proc.communicate = blocking_communicate
+
+        async def run_and_cancel():
+            task = asyncio.create_task(
+                execute_build_profile(
+                    repo_path="/some/project",
+                    command="make",
+                    target="dist",
+                    timeout_seconds=60,
+                )
+            )
+            await asyncio.sleep(0)  # Let the coroutine start
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            await run_and_cancel()
+
+        mock_proc.kill.assert_called_once()
+
+
+class TestExecuteLintProfileCancellation:
+    """Test CancelledError cleanup for execute_lint_profile."""
+
+    @pytest.mark.asyncio
+    async def test_lint_cancellation_kills_process(self):
+        """CancelledError while running subprocess kills and waits the process (no zombie)."""
+        from src.sohnbot.capabilities.command_profiles.profile_executor import execute_lint_profile
+
+        mock_proc = AsyncMock()
+        mock_proc.kill = MagicMock()
+        mock_proc.returncode = None  # Process still running
+
+        async def blocking_communicate():
+            await asyncio.sleep(100)
+            return b"", b""
+
+        mock_proc.communicate = blocking_communicate
+
+        async def run_and_cancel():
+            task = asyncio.create_task(
+                execute_lint_profile(
+                    repo_path="/some/project",
+                    command="pylint",
+                    files=[],
+                    timeout_seconds=60,
+                )
+            )
+            await asyncio.sleep(0)  # Let the coroutine start
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            await run_and_cancel()
+
+        mock_proc.kill.assert_called_once()

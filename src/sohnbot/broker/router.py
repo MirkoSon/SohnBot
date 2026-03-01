@@ -33,6 +33,7 @@ from ..persistence.notification import (
     get_notifications_enabled,
 )
 from ..config.manager import ConfigManager
+from ..config.registry import _SAFE_COMMAND_RE as _SAFE_PROFILE_RE
 
 logger = structlog.get_logger(__name__)
 
@@ -486,9 +487,7 @@ class BrokerRouter:
 
             target = params.get("target") or ""
             if target:
-                import re as _re
-                _safe_target_re = _re.compile(r'^[a-zA-Z0-9_./-][\w ./_-]*$')
-                if not _safe_target_re.match(target):
+                if not _SAFE_PROFILE_RE.match(target):
                     self._operation_start_times.pop(operation_id, None)
                     return BrokerResult(
                         allowed=False,

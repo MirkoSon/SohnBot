@@ -1,6 +1,6 @@
 # Story 5.2: Build Project Profile
 
-Status: review
+Status: done
 
 ## Story
 
@@ -404,6 +404,17 @@ Tier 0 operations skip snapshot creation. Once `("profiles", "build")` is in `RE
 - execute_lint_profile function (model): [Source: `src/sohnbot/capabilities/command_profiles/profile_executor.py:9-85`]
 - command_profiles __init__.py: [Source: `src/sohnbot/capabilities/command_profiles/__init__.py`]
 
+## Senior Developer Review (AI)
+
+**Review Date:** 2026-03-01
+**Outcome:** Changes Requested → Fixed
+
+### Action Items (all resolved)
+
+- [x] [High] Zombie process risk: CancelledError in execute_build_profile (and execute_lint_profile) bypassed the proc.kill()/wait() cleanup when outer broker timeout fires first — added `except asyncio.CancelledError:` handler with `asyncio.shield(proc.wait())` to both functions [`profile_executor.py`]
+- [x] [Medium] Inline regex `_re.compile(...)` recompiled on every route_operation call with non-empty target — replaced with module-level import of `_SAFE_COMMAND_RE` from registry (alias `_SAFE_PROFILE_RE`) [`router.py`]
+- [x] [Medium] AC4 (Telegram notification) had no unit test — `_format_notification_message` for build/passed and build/failed untested — added `test_format_notification_build_passed` and `test_format_notification_build_failed` [`test_broker.py`]
+
 ## Dev Agent Record
 
 ### Agent Model Used
@@ -439,7 +450,7 @@ claude-sonnet-4-6
 - `src/sohnbot/runtime/mcp_tools.py` (modified — added `profiles__build` tool + registered in tools list)
 - `src/sohnbot/config/registry.py` (modified — added `_validate_build_command` validator and `commands.build_command` ConfigKey)
 - `config/default.toml` (modified — added `build_command = "make"` under `[commands]`)
-- `tests/unit/test_profile_executor.py` (modified — added `TestExecuteBuildProfile` class with 7 tests)
+- `tests/unit/test_profile_executor.py` (modified — added `TestExecuteBuildProfile` (7 tests) + `TestExecuteLintProfileCancellation` + `test_build_cancellation_kills_process`)
 - `tests/unit/test_mcp_tools.py` (modified — added 3 `profiles__build` tests; added `mcp__sohnbot__profiles__build` to allowed tools list)
-- `tests/unit/test_broker.py` (modified — added Tier 0 classification test inline; added 5 broker integration tests for profiles/build)
+- `tests/unit/test_broker.py` (modified — added Tier 0 classification test; 5 broker integration tests; 2 notification formatter tests)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified — story status updated)

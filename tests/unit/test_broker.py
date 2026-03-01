@@ -553,3 +553,36 @@ async def test_profiles_build_success_routes_to_capability(mock_log_end, mock_lo
     assert result.result["passed"] is True
     assert result.result["exit_code"] == 0
     assert result.snapshot_ref is None  # Tier 0 — no snapshot
+
+# ─── profiles/build notification formatter tests ─────────────────────────────
+
+def test_format_notification_build_passed(tmp_path):
+    """_format_notification_message returns PASSED string with exit_code and repo."""
+    router = BrokerRouter(ScopeValidator([str(tmp_path)]))
+    msg = router._format_notification_message(
+        capability="profiles",
+        action="build",
+        params={"repo_path": "/some/project"},
+        status="completed",
+        snapshot_ref=None,
+        result={"passed": True, "exit_code": 0},
+    )
+    assert "✅ PASSED" in msg
+    assert "Build profile" in msg
+    assert "exit_code=0" in msg
+    assert "/some/project" in msg
+
+
+def test_format_notification_build_failed(tmp_path):
+    """_format_notification_message returns FAILED string with non-zero exit_code."""
+    router = BrokerRouter(ScopeValidator([str(tmp_path)]))
+    msg = router._format_notification_message(
+        capability="profiles",
+        action="build",
+        params={"repo_path": "/some/project"},
+        status="completed",
+        snapshot_ref=None,
+        result={"passed": False, "exit_code": 2},
+    )
+    assert "❌ FAILED" in msg
+    assert "exit_code=2" in msg
