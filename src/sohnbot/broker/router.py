@@ -422,21 +422,55 @@ class BrokerRouter:
                 )
 
             repo_path = params.get("repo_path")
-            if repo_path:
-                is_valid, error_msg = self.scope_validator.validate_path(repo_path)
-                if not is_valid:
-                    normalized_path = self.scope_validator.get_normalized_path(repo_path)
-                    allowed_roots = self.scope_validator.get_allowed_roots()
-                    logger.warning(
-                        "scope_violation_blocked",
-                        operation_id=operation_id,
-                        chat_id=chat_id,
-                        capability=capability,
-                        action=action,
-                        attempted_path=str(repo_path),
-                        normalized_path=normalized_path,
-                        allowed_roots=allowed_roots,
-                    )
+            if not repo_path or not str(repo_path).strip():
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "invalid_request",
+                        "message": "repo_path must not be empty",
+                        "details": {"action": action},
+                        "retryable": False,
+                    },
+                )
+
+            is_valid, error_msg = self.scope_validator.validate_path(repo_path)
+            if not is_valid:
+                normalized_path = self.scope_validator.get_normalized_path(repo_path)
+                allowed_roots = self.scope_validator.get_allowed_roots()
+                logger.warning(
+                    "scope_violation_blocked",
+                    operation_id=operation_id,
+                    chat_id=chat_id,
+                    capability=capability,
+                    action=action,
+                    attempted_path=str(repo_path),
+                    normalized_path=normalized_path,
+                    allowed_roots=allowed_roots,
+                )
+                self._operation_start_times.pop(operation_id, None)
+                return BrokerResult(
+                    allowed=False,
+                    operation_id=operation_id,
+                    tier=tier,
+                    error={
+                        "code": "scope_violation",
+                        "message": error_msg,
+                        "details": {
+                            "path": str(repo_path),
+                            "normalized_path": normalized_path,
+                            "allowed_roots": allowed_roots,
+                        },
+                        "retryable": False,
+                    },
+                )
+
+            files = params.get("files") or []
+            for f in files:
+                from pathlib import PurePosixPath
+                if ".." in PurePosixPath(str(f)).parts:
                     self._operation_start_times.pop(operation_id, None)
                     return BrokerResult(
                         allowed=False,
@@ -444,12 +478,8 @@ class BrokerRouter:
                         tier=tier,
                         error={
                             "code": "scope_violation",
-                            "message": error_msg,
-                            "details": {
-                                "path": str(repo_path),
-                                "normalized_path": normalized_path,
-                                "allowed_roots": allowed_roots,
-                            },
+                            "message": f"files entry contains path traversal: {f}",
+                            "details": {"file": str(f)},
                             "retryable": False,
                         },
                     )

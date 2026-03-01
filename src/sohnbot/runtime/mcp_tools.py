@@ -625,7 +625,7 @@ def create_sohnbot_mcp_server(broker, config):
         exit_code = data.get("exit_code", "?")
         stdout = data.get("stdout", "")
         stderr = data.get("stderr", "")
-        output = stdout or stderr
+        output = "\n".join(part for part in (stdout, stderr) if part)
         return _as_mcp_text(f"{status} (exit {exit_code})\n{output[:2000]}")
 
     @tool("observe__status", "Get current system status snapshot", {})

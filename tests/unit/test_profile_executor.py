@@ -78,6 +78,7 @@ class TestExecuteLintProfile:
                 )
 
         mock_proc.kill.assert_called_once()
+        mock_proc.wait.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_lint_no_files_runs_against_cwd(self):

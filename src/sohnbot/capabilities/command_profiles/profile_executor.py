@@ -57,6 +57,7 @@ async def execute_lint_profile(
     except TimeoutError:
         if proc is not None:
             proc.kill()
+            await proc.wait()
         logger.warning(
             "lint_profile_timeout",
             repo_path=repo_path,

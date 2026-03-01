@@ -285,15 +285,17 @@ claude-sonnet-4-6
 - 7 new unit tests in `test_profile_executor.py`; 3 new tests added to `test_mcp_tools.py`
 - `classify_tier("profiles", "lint", 0) == 0` was already in `test_broker.py` (confirmed passing)
 - Pre-existing failing test `test_config_manager.py::test_static_config_validation` (regex mismatch) confirmed pre-existing, NOT introduced by this story
+- **Code review fixes applied**: H1 (zombie process — added `await proc.wait()` after `proc.kill()`), H2 (security validator for `commands.lint_command` rejecting shell metacharacters and empty strings), H3 (files list items validated for `..` path traversal components), M1 (stdout+stderr combined in MCP output instead of `stdout or stderr`), M2 (empty `repo_path=""` rejected as `invalid_request` before scope check), M3 (5 broker integration tests added for profiles: missing repo_path, empty repo_path, out-of-scope repo_path, files traversal, and success routing)
 
 ### File List
 
-- `src/sohnbot/capabilities/command_profiles/profile_executor.py` (created)
+- `src/sohnbot/capabilities/command_profiles/profile_executor.py` (created; fixed H1: await proc.wait())
 - `src/sohnbot/capabilities/command_profiles/__init__.py` (modified — exports execute_lint_profile)
-- `src/sohnbot/broker/router.py` (modified — profiles validation block, _execute_capability profiles/lint, _format_notification_message profiles/lint)
-- `src/sohnbot/runtime/mcp_tools.py` (modified — profiles__lint tool + registered in tools list)
-- `src/sohnbot/config/registry.py` (modified — commands.lint_command added)
+- `src/sohnbot/broker/router.py` (modified — profiles validation block, _execute_capability profiles/lint, _format_notification_message profiles/lint; fixed M2: empty repo_path, H3: files traversal check)
+- `src/sohnbot/runtime/mcp_tools.py` (modified — profiles__lint tool + registered in tools list; fixed M1: stdout+stderr combined)
+- `src/sohnbot/config/registry.py` (modified — commands.lint_command added; fixed H2: security validator)
 - `config/default.toml` (modified — lint_command = "pylint" under [commands])
-- `tests/unit/test_profile_executor.py` (created — 7 unit tests)
+- `tests/unit/test_profile_executor.py` (created — 7 unit tests; updated H1 test to assert wait() called)
 - `tests/unit/test_mcp_tools.py` (modified — 3 new profiles__lint tests, profiles__lint added to allowed tools list)
+- `tests/unit/test_broker.py` (modified — 5 new profiles broker integration tests for M3)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified — story status updates)
