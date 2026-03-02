@@ -18,6 +18,7 @@ import structlog
 
 if TYPE_CHECKING:
     from ..config.manager import ConfigManager
+from ..persistence.db import get_db
 from ..persistence.notification import enqueue_notification
 from ..persistence.search_volume import (
     claim_alert_slot,
@@ -99,7 +100,6 @@ async def brave_search(
     mode: Literal["fresh", "static"] = "fresh",
     max_results: int = 5,
     timeout_seconds: int = 5,
-    db_path: str = "data/sohnbot.db",
     config_manager: "ConfigManager | None" = None,
 ) -> dict[str, Any]:
     """Query Brave Search and return normalized top results."""
@@ -162,8 +162,8 @@ async def brave_search(
     if effective_mode == "static":
         query_hash = get_query_hash(normalized_query, "static")
         try:
-            cached = await _get_cached_search(db_path=db_path, query_hash=query_hash)
-        except (aiosqlite.Error, TypeError, ValueError) as exc:
+            cached = await _get_cached_search(query_hash=query_hash)
+        except (aiosqlite.Error, RuntimeError, TypeError, ValueError) as exc:
             logger.warning(
                 "cache_lookup_error_fallback",
                 query_hash=query_hash,
@@ -179,7 +179,6 @@ async def brave_search(
             )
             # Volume tracking intentionally counts cache hits too (all successful searches).
             await _track_search_volume_and_alert(
-                db_path=db_path,
                 config_manager=config_manager,
             )
             return cached
@@ -306,14 +305,13 @@ async def brave_search(
         query_hash = get_query_hash(normalized_query, "static")
         try:
             await _store_search_cache(
-                db_path=db_path,
                 query_hash=query_hash,
                 query=normalized_query,
                 mode="static",
                 result=response,
                 config_manager=config_manager,
             )
-        except (aiosqlite.Error, TypeError, ValueError) as exc:
+        except (aiosqlite.Error, RuntimeError, TypeError, ValueError) as exc:
             logger.warning(
                 "cache_storage_error_fallback",
                 query_hash=query_hash,
@@ -321,7 +319,6 @@ async def brave_search(
             )
     # Volume tracking intentionally counts API-backed responses and cache hits.
     await _track_search_volume_and_alert(
-        db_path=db_path,
         config_manager=config_manager,
     )
     return response
@@ -333,23 +330,23 @@ def get_query_hash(query: str, mode: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-async def _get_cached_search(db_path: str, query_hash: str) -> dict[str, Any] | None:
+async def _get_cached_search(query_hash: str) -> dict[str, Any] | None:
     """Return cached search result when present and not expired."""
     try:
-        async with aiosqlite.connect(db_path) as db:
-            cursor = await db.execute(
-                """
-                SELECT query, mode, results_json, created_at
-                FROM search_cache
-                WHERE query_hash = ?
-                  AND expires_at > datetime('now')
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (query_hash,),
-            )
-            row = await cursor.fetchone()
-            await cursor.close()
+        db = await get_db()
+        cursor = await db.execute(
+            """
+            SELECT query, mode, results_json, created_at
+            FROM search_cache
+            WHERE query_hash = ?
+              AND expires_at > datetime('now')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (query_hash,),
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
     except aiosqlite.Error as exc:
         logger.warning("cache_lookup_error", query_hash=query_hash, error=str(exc))
         return None
@@ -381,7 +378,6 @@ async def _get_cached_search(db_path: str, query_hash: str) -> dict[str, Any] | 
 
 
 async def _store_search_cache(
-    db_path: str,
     query_hash: str,
     query: str,
     mode: str,
@@ -402,16 +398,16 @@ async def _store_search_cache(
     results_json = json.dumps(result.get("results", []))
 
     try:
-        async with aiosqlite.connect(db_path) as db:
-            await db.execute(
-                """
-                INSERT OR REPLACE INTO search_cache
-                (query_hash, query, mode, results_json, created_at, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (query_hash, query, mode, results_json, created_at, expires_at),
-            )
-            await db.commit()
+        db = await get_db()
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO search_cache
+            (query_hash, query, mode, results_json, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (query_hash, query, mode, results_json, created_at, expires_at),
+        )
+        await db.commit()
         logger.info(
             "cache_stored",
             query_hash=query_hash,
@@ -423,16 +419,16 @@ async def _store_search_cache(
         logger.warning("cache_storage_error", query_hash=query_hash, error=str(exc))
 
 
-async def cleanup_expired_cache(db_path: str) -> int:
+async def cleanup_expired_cache() -> int:
     """Delete expired cache rows and return deleted row count."""
     try:
-        async with aiosqlite.connect(db_path) as db:
-            cursor = await db.execute(
-                "DELETE FROM search_cache WHERE expires_at < datetime('now')"
-            )
-            await db.commit()
-            deleted_count = int(cursor.rowcount or 0)
-            await cursor.close()
+        db = await get_db()
+        cursor = await db.execute(
+            "DELETE FROM search_cache WHERE expires_at < datetime('now')"
+        )
+        await db.commit()
+        deleted_count = int(cursor.rowcount or 0)
+        await cursor.close()
         logger.info("cache_cleanup_completed", deleted_count=deleted_count)
         return deleted_count
     except aiosqlite.Error as exc:
@@ -441,11 +437,14 @@ async def cleanup_expired_cache(db_path: str) -> int:
 
 
 async def _track_search_volume_and_alert(
-    db_path: str,
     config_manager: "ConfigManager | None",
 ) -> None:
     """Increment daily search count and send soft threshold alert once/day."""
-    increment_result = await increment_daily_search_count(db_path)
+    try:
+        increment_result = await increment_daily_search_count()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("search_volume_tracking_error", reason="increment_failed", error=str(exc))
+        return
     if increment_result is None:
         logger.warning("search_volume_tracking_error", reason="increment_failed")
         return
@@ -468,7 +467,7 @@ async def _track_search_volume_and_alert(
             )
             threshold = 100
 
-    await _maybe_cleanup_volume_records(db_path=db_path)
+    await _maybe_cleanup_volume_records()
 
     if count <= threshold or alert_sent:
         return
@@ -498,7 +497,7 @@ async def _track_search_volume_and_alert(
         )
         return
 
-    claimed_count = await claim_alert_slot(db_path=db_path, threshold=threshold)
+    claimed_count = await claim_alert_slot(threshold=threshold)
     if claimed_count is None:
         return
 
@@ -523,12 +522,15 @@ async def _track_search_volume_and_alert(
         logger.warning("search_volume_alert_enqueue_failed", error=str(exc))
 
 
-async def _maybe_cleanup_volume_records(db_path: str) -> None:
+async def _maybe_cleanup_volume_records() -> None:
     """Run volume cleanup at most once per UTC day."""
     global _LAST_VOLUME_CLEANUP_DATE
     today = datetime.now(timezone.utc).date().isoformat()
     if _LAST_VOLUME_CLEANUP_DATE == today:
         return
-    deleted = await cleanup_old_volume_records(db_path=db_path, retention_days=30)
-    _LAST_VOLUME_CLEANUP_DATE = today
-    logger.info("search_volume_cleanup_tick", deleted=deleted, date=today)
+    try:
+        deleted = await cleanup_old_volume_records(retention_days=30)
+        _LAST_VOLUME_CLEANUP_DATE = today
+        logger.info("search_volume_cleanup_tick", deleted=deleted, date=today)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("search_volume_cleanup_failed", error=str(exc))

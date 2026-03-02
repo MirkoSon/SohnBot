@@ -17,9 +17,11 @@ from src.sohnbot.main import (
 @patch("src.sohnbot.main._safe_http_server_loop", new_callable=AsyncMock)
 @patch("src.sohnbot.main.initialize_heartbeat_job", new_callable=AsyncMock)
 @patch("src.sohnbot.main.initialize_operation_logs_cleanup_job", new_callable=AsyncMock)
+@patch("src.sohnbot.main.load_dynamic_config", new_callable=AsyncMock)
 @patch("src.sohnbot.main.get_config_manager")
 async def test_run_main_creates_scheduler_task_with_configured_tick(
     mock_get_config,
+    mock_load_dynamic,
     mock_init_heartbeat,
     mock_init_cleanup,
     mock_http_loop,
@@ -49,9 +51,11 @@ async def test_run_main_creates_scheduler_task_with_configured_tick(
 @patch("src.sohnbot.main._safe_http_server_loop", new_callable=AsyncMock)
 @patch("src.sohnbot.main.initialize_heartbeat_job", new_callable=AsyncMock)
 @patch("src.sohnbot.main.initialize_operation_logs_cleanup_job", new_callable=AsyncMock)
+@patch("src.sohnbot.main.load_dynamic_config", new_callable=AsyncMock)
 @patch("src.sohnbot.main.get_config_manager")
 async def test_run_main_starts_http_when_enabled(
     mock_get_config,
+    mock_load_dynamic,
     mock_init_heartbeat,
     mock_init_cleanup,
     mock_http_loop,

@@ -11,7 +11,9 @@ Design:
 - Event System: Subscribers listen for config_updated events to apply changes
 """
 
+import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Optional
 import asyncio
@@ -213,26 +215,89 @@ class ConfigManager:
         logger.info("dynamic_config_defaults_loaded", keys_count=len(config))
         return config
 
-    async def load_dynamic_config_from_db(self, db_path: str) -> dict[str, Any]:
-        """Load dynamic configuration from SQLite database.
+    async def load_dynamic_config_from_db(self) -> dict[str, Any]:
+        """Load persisted dynamic configuration from SQLite, overlaying DB values onto defaults.
 
-        This method will be implemented in Story 1.2 when the database schema is created.
-        For Story 1.1, this is a placeholder that logs the intent.
-
-        Args:
-            db_path: Path to SQLite database
+        Must be called after the database is initialized and migrations are applied.
+        DB values override TOML defaults for any key stored with tier='dynamic'.
 
         Returns:
-            Dictionary of dynamic configuration from database
-
-        Note:
-            Requires config table to exist (created in Story 1.2)
+            Updated dynamic_config dict with DB values applied
         """
-        logger.warning("dynamic_config_from_db_not_implemented",
-                      message="Database-backed dynamic config requires Story 1.2",
-                      db_path=db_path)
-        # For now, return the defaults loaded from TOML
+        from ..persistence.db import get_db
+
+        logger.info("loading_dynamic_config_from_db")
+        db = await get_db()
+        cursor = await db.execute(
+            "SELECT key, value FROM config WHERE tier = 'dynamic'"
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+
+        loaded_count = 0
+        for key, json_value in rows:
+            try:
+                value = json.loads(json_value)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("dynamic_config_db_invalid_json", key=key)
+                continue
+
+            is_valid, error_msg = validate_config_value(key, value)
+            if not is_valid:
+                logger.warning(
+                    "dynamic_config_db_validation_failed", key=key, error=error_msg
+                )
+                continue
+
+            self.dynamic_config[key] = value
+            loaded_count += 1
+
+        logger.info("dynamic_config_loaded_from_db", keys_count=loaded_count)
         return self.dynamic_config
+
+    async def _persist_to_database(self, key: str, value: Any) -> None:
+        """Persist a dynamic config value to the SQLite config table.
+
+        Stores value as JSON-encoded string with tier='dynamic'.
+        """
+        from ..persistence.db import get_db
+
+        json_value = json.dumps(value)
+        now = int(time.time())
+        db = await get_db()
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO config (key, value, updated_at, updated_by, tier)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (key, json_value, now, "config_manager", "dynamic"),
+        )
+        await db.commit()
+        logger.info("dynamic_config_persisted", key=key)
+
+    async def reset_dynamic_config(self, key: str) -> None:
+        """Delete a dynamic config override from DB and restore in-memory to registry default.
+
+        Args:
+            key: Dynamic configuration key to reset
+
+        Raises:
+            KeyError: If key is not a dynamic config key
+        """
+        from ..persistence.db import get_db
+
+        config_key_def = get_config_key(key)
+        if config_key_def.tier != "dynamic":
+            raise KeyError(f"Cannot reset static config key '{key}'")
+
+        db = await get_db()
+        await db.execute("DELETE FROM config WHERE key = ?", (key,))
+        await db.commit()
+
+        self.dynamic_config[key] = config_key_def.default
+        logger.info(
+            "dynamic_config_reset", key=key, restored_default=config_key_def.default
+        )
 
     async def update_dynamic_config(self, key: str, value: Any) -> None:
         """Update a dynamic configuration value and notify subscribers.
@@ -265,11 +330,8 @@ class ConfigManager:
                    old_value=_redact_sensitive_value(key, old_value),
                    new_value=_redact_sensitive_value(key, value))
 
-        # NOTE: Database persistence not yet implemented
-        # DEPENDENCY: Story 1.2 will create config table and implement persistence here
-        # IMPACT: Dynamic config changes are in-memory only and lost on restart until Story 1.2
-        # TODO (Story 1.2): Add database persistence with:
-        #   await self._persist_to_database(key, value)
+        # Persist to database so changes survive restart
+        await self._persist_to_database(key, value)
 
         # Notify subscribers
         await self._notify_subscribers(key, value)

@@ -1,5 +1,6 @@
 """Database connection management with WAL mode and pragma configuration."""
 
+import asyncio
 import aiosqlite
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,7 @@ class DatabaseManager:
         """
         self.db_path = Path(db_path)
         self._connection: Optional[aiosqlite.Connection] = None
+        self._write_lock = asyncio.Lock()
 
     async def get_connection(self) -> aiosqlite.Connection:
         """
@@ -102,6 +104,58 @@ class DatabaseManager:
                 db_path=str(self.db_path),
                 migrations_dir=str(migrations_dir)
             )
+
+    async def execute_write(self, sql: str, params=None) -> aiosqlite.Cursor:
+        """
+        Execute a single write statement with asyncio lock and BEGIN IMMEDIATE.
+
+        Serializes concurrent writes via asyncio.Lock and uses BEGIN IMMEDIATE
+        to acquire a reserved lock at the SQLite level, preventing deadlocks.
+
+        Args:
+            sql: SQL DML statement to execute
+            params: Optional tuple of parameters
+
+        Returns:
+            Cursor with rowcount and lastrowid populated
+        """
+        async with self._write_lock:
+            conn = await self.get_connection()
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await conn.execute(sql, params or ())
+                await conn.commit()
+                return cursor
+            except Exception:
+                try:
+                    await conn.rollback()
+                except Exception:
+                    pass
+                raise
+
+    async def execute_write_many(self, operations: list) -> None:
+        """
+        Execute multiple write statements in one transaction with asyncio lock.
+
+        All operations share a single BEGIN IMMEDIATE transaction, giving
+        atomicity across multiple statements while holding the write lock once.
+
+        Args:
+            operations: List of (sql, params) tuples to execute in order
+        """
+        async with self._write_lock:
+            conn = await self.get_connection()
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                for sql, params in operations:
+                    await conn.execute(sql, params or ())
+                await conn.commit()
+            except Exception:
+                try:
+                    await conn.rollback()
+                except Exception:
+                    pass
+                raise
 
     async def close(self) -> None:
         """Close database connection."""

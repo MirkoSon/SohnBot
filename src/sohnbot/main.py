@@ -94,9 +94,20 @@ async def initialize_operation_logs_cleanup_job() -> None:
         logger.error("operation_logs_cleanup_initialization_failed", error=str(exc), exc_info=True)
 
 
+async def load_dynamic_config() -> None:
+    """Load persisted dynamic config from DB, overlaying DB values onto TOML defaults."""
+    try:
+        config = get_config_manager()
+        await config.load_dynamic_config_from_db()
+        logger.info("dynamic_config_loaded")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("dynamic_config_load_failed", error=str(exc))
+
+
 async def run_main() -> None:
     """Run background runtime tasks for SohnBot."""
     config = get_config_manager()
+    await load_dynamic_config()
     interval = int(config.get("observability.collection_interval_seconds"))
     scheduler_tick = int(config.get("scheduler.tick_seconds"))
 

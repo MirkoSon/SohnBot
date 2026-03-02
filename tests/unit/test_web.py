@@ -18,6 +18,25 @@ from src.sohnbot.capabilities.web import (
     get_query_hash,
     is_time_sensitive,
 )
+from src.sohnbot.persistence.db import DatabaseManager, set_db_manager
+
+
+@pytest.fixture
+async def web_db(tmp_path):
+    """Set up a DatabaseManager with migrated DB; install as global manager."""
+    db_path = tmp_path / "web-cache.db"
+    migrations_dir = (
+        Path(__file__).parent.parent.parent
+        / "src" / "sohnbot" / "persistence" / "migrations"
+    )
+    apply_migrations(db_path, migrations_dir)
+    manager = DatabaseManager(db_path)
+    await manager.get_connection()
+    set_db_manager(manager)
+    yield db_path, manager
+    await manager.close()
+    import src.sohnbot.persistence.db as db_mod
+    db_mod._db_manager = None
 
 
 @pytest.mark.asyncio
@@ -44,7 +63,11 @@ async def test_brave_search_success():
             "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
             new=AsyncMock(return_value=response),
         ):
-            result = await brave_search("python asyncio", mode="fresh")
+            with patch(
+                "src.sohnbot.capabilities.web.increment_daily_search_count",
+                new=AsyncMock(return_value=(1, False)),
+            ):
+                result = await brave_search("python asyncio", mode="fresh")
 
     assert result["total_results"] == 1
     assert result["mode"] == "fresh"
@@ -123,7 +146,11 @@ async def test_brave_search_limits_to_five_results():
             "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
             new=AsyncMock(return_value=response),
         ):
-            result = await brave_search("python asyncio", mode="static", max_results=10)
+            with patch(
+                "src.sohnbot.capabilities.web.increment_daily_search_count",
+                new=AsyncMock(return_value=(1, False)),
+            ):
+                result = await brave_search("python asyncio", mode="static", max_results=10)
 
     assert result["total_results"] == 5
     assert len(result["results"]) == 5
@@ -150,16 +177,9 @@ def test_is_time_sensitive_detection():
     assert is_time_sensitive("python async tutorial") is False
 
 
-@pytest.fixture
-def cache_db(tmp_path):
-    db_path = tmp_path / "web-cache.db"
-    migrations_dir = Path(__file__).parent.parent.parent / "src" / "sohnbot" / "persistence" / "migrations"
-    apply_migrations(db_path, migrations_dir)
-    return db_path
-
-
 @pytest.mark.asyncio
-async def test_static_mode_cache_miss_stores_result(cache_db):
+async def test_static_mode_cache_miss_stores_result(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -177,13 +197,17 @@ async def test_static_mode_cache_miss_stores_result(cache_db):
             "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
             new=AsyncMock(return_value=response),
         ):
-            result = await brave_search("python asyncio", mode="static", db_path=str(cache_db))
+            with patch(
+                "src.sohnbot.capabilities.web.increment_daily_search_count",
+                new=AsyncMock(return_value=(1, False)),
+            ):
+                result = await brave_search("python asyncio", mode="static")
 
     assert result["cached"] is False
     assert result["effective_mode"] == "static"
     assert result["cache_bypassed"] is False
     query_hash = get_query_hash("python asyncio", "static")
-    async with aiosqlite.connect(str(cache_db)) as db:
+    async with aiosqlite.connect(str(db_path)) as db:
         cursor = await db.execute(
             "SELECT query, mode FROM search_cache WHERE query_hash = ?",
             (query_hash,),
@@ -196,12 +220,13 @@ async def test_static_mode_cache_miss_stores_result(cache_db):
 
 
 @pytest.mark.asyncio
-async def test_static_mode_cache_hit_skips_api_call(cache_db):
+async def test_static_mode_cache_hit_skips_api_call(web_db):
+    db_path, manager = web_db
     query = "python asyncio"
     query_hash = get_query_hash(query, "static")
     created_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-    async with aiosqlite.connect(str(cache_db)) as db:
+    async with aiosqlite.connect(str(db_path)) as db:
         await db.execute(
             """
             INSERT INTO search_cache (query_hash, query, mode, results_json, created_at, expires_at)
@@ -223,7 +248,11 @@ async def test_static_mode_cache_hit_skips_api_call(cache_db):
             "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
             new=AsyncMock(),
         ) as mock_get:
-            result = await brave_search(query, mode="static", db_path=str(cache_db))
+            with patch(
+                "src.sohnbot.capabilities.web.increment_daily_search_count",
+                new=AsyncMock(return_value=(1, False)),
+            ):
+                result = await brave_search(query, mode="static")
 
     assert result["cached"] is True
     assert result["mode"] == "static"
@@ -234,7 +263,8 @@ async def test_static_mode_cache_hit_skips_api_call(cache_db):
 
 
 @pytest.mark.asyncio
-async def test_fresh_mode_bypasses_cache(cache_db):
+async def test_fresh_mode_bypasses_cache(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -248,7 +278,11 @@ async def test_fresh_mode_bypasses_cache(cache_db):
             "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
             new=AsyncMock(return_value=response),
         ) as mock_get:
-            result = await brave_search("python asyncio", mode="fresh", db_path=str(cache_db))
+            with patch(
+                "src.sohnbot.capabilities.web.increment_daily_search_count",
+                new=AsyncMock(return_value=(1, False)),
+            ):
+                result = await brave_search("python asyncio", mode="fresh")
 
     assert result["cached"] is False
     assert result["mode"] == "fresh"
@@ -258,7 +292,8 @@ async def test_fresh_mode_bypasses_cache(cache_db):
 
 
 @pytest.mark.asyncio
-async def test_time_sensitive_static_query_bypasses_cache(cache_db):
+async def test_time_sensitive_static_query_bypasses_cache(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -270,7 +305,11 @@ async def test_time_sensitive_static_query_bypasses_cache(cache_db):
             "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
             new=AsyncMock(return_value=response),
         ):
-            result = await brave_search("latest python news", mode="static", db_path=str(cache_db))
+            with patch(
+                "src.sohnbot.capabilities.web.increment_daily_search_count",
+                new=AsyncMock(return_value=(1, False)),
+            ):
+                result = await brave_search("latest python news", mode="static")
 
     assert result["cached"] is False
     assert result["mode"] == "static"
@@ -279,11 +318,12 @@ async def test_time_sensitive_static_query_bypasses_cache(cache_db):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_expired_cache_removes_old_rows(cache_db):
+async def test_cleanup_expired_cache_removes_old_rows(web_db):
+    db_path, manager = web_db
     query_hash = get_query_hash("old query", "static")
     created_at = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
     expires_at = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
-    async with aiosqlite.connect(str(cache_db)) as db:
+    async with aiosqlite.connect(str(db_path)) as db:
         await db.execute(
             """
             INSERT INTO search_cache (query_hash, query, mode, results_json, created_at, expires_at)
@@ -293,12 +333,13 @@ async def test_cleanup_expired_cache_removes_old_rows(cache_db):
         )
         await db.commit()
 
-    deleted = await cleanup_expired_cache(str(cache_db))
+    deleted = await cleanup_expired_cache()
     assert deleted == 1
 
 
 @pytest.mark.asyncio
-async def test_cache_retention_days_from_config(cache_db):
+async def test_cache_retention_days_from_config(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -314,15 +355,18 @@ async def test_cache_retention_days_from_config(cache_db):
             "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
             new=AsyncMock(return_value=response),
         ):
-            await brave_search(
-                "retention test",
-                mode="static",
-                db_path=str(cache_db),
-                config_manager=config,
-            )
+            with patch(
+                "src.sohnbot.capabilities.web.increment_daily_search_count",
+                new=AsyncMock(return_value=(1, False)),
+            ):
+                await brave_search(
+                    "retention test",
+                    mode="static",
+                    config_manager=config,
+                )
 
     query_hash = get_query_hash("retention test", "static")
-    async with aiosqlite.connect(str(cache_db)) as db:
+    async with aiosqlite.connect(str(db_path)) as db:
         cursor = await db.execute(
             "SELECT created_at, expires_at FROM search_cache WHERE query_hash = ?",
             (query_hash,),
@@ -336,7 +380,8 @@ async def test_cache_retention_days_from_config(cache_db):
 
 
 @pytest.mark.asyncio
-async def test_cache_lookup_error_falls_back_to_api(cache_db):
+async def test_cache_lookup_error_falls_back_to_api(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -352,14 +397,19 @@ async def test_cache_lookup_error_falls_back_to_api(cache_db):
                 "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
                 new=AsyncMock(return_value=response),
             ) as mock_get:
-                result = await brave_search("python asyncio", mode="static", db_path=str(cache_db))
+                with patch(
+                    "src.sohnbot.capabilities.web.increment_daily_search_count",
+                    new=AsyncMock(return_value=(1, False)),
+                ):
+                    result = await brave_search("python asyncio", mode="static")
 
     assert result["cached"] is False
     mock_get.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_cache_storage_error_does_not_fail_search(cache_db):
+async def test_cache_storage_error_does_not_fail_search(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -379,14 +429,19 @@ async def test_cache_storage_error_does_not_fail_search(cache_db):
                     "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
                     new=AsyncMock(return_value=response),
                 ):
-                    result = await brave_search("python asyncio", mode="static", db_path=str(cache_db))
+                    with patch(
+                        "src.sohnbot.capabilities.web.increment_daily_search_count",
+                        new=AsyncMock(return_value=(1, False)),
+                    ):
+                        result = await brave_search("python asyncio", mode="static")
 
     assert result["cached"] is False
     assert result["total_results"] == 1
 
 
 @pytest.mark.asyncio
-async def test_time_sensitive_bypass_preserves_requested_mode(cache_db):
+async def test_time_sensitive_bypass_preserves_requested_mode(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -398,7 +453,11 @@ async def test_time_sensitive_bypass_preserves_requested_mode(cache_db):
             "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
             new=AsyncMock(return_value=response),
         ):
-            result = await brave_search("latest python news", mode="static", db_path=str(cache_db))
+            with patch(
+                "src.sohnbot.capabilities.web.increment_daily_search_count",
+                new=AsyncMock(return_value=(1, False)),
+            ):
+                result = await brave_search("latest python news", mode="static")
 
     assert result["cached"] is False
     assert result["mode"] == "static"
@@ -407,7 +466,8 @@ async def test_time_sensitive_bypass_preserves_requested_mode(cache_db):
 
 
 @pytest.mark.asyncio
-async def test_brave_search_increments_daily_volume_counter(cache_db):
+async def test_brave_search_increments_daily_volume_counter(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -423,12 +483,13 @@ async def test_brave_search_increments_daily_volume_counter(cache_db):
                 "src.sohnbot.capabilities.web.httpx.AsyncClient.get",
                 new=AsyncMock(return_value=response),
             ):
-                await brave_search("volume check", mode="fresh", db_path=str(cache_db))
+                await brave_search("volume check", mode="fresh")
     mock_increment.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_brave_search_sends_volume_alert_when_threshold_exceeded(cache_db):
+async def test_brave_search_sends_volume_alert_when_threshold_exceeded(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -461,10 +522,9 @@ async def test_brave_search_sends_volume_alert_when_threshold_exceeded(cache_db)
                         await brave_search(
                             "volume alert",
                             mode="fresh",
-                            db_path=str(cache_db),
                             config_manager=config,
                         )
-    mock_claim.assert_awaited_once_with(db_path=str(cache_db), threshold=3)
+    mock_claim.assert_awaited_once_with(threshold=3)
     mock_enqueue.assert_awaited_once()
     kwargs = mock_enqueue.await_args.kwargs
     assert kwargs["chat_id"] == "admin-1"
@@ -473,7 +533,8 @@ async def test_brave_search_sends_volume_alert_when_threshold_exceeded(cache_db)
 
 
 @pytest.mark.asyncio
-async def test_brave_search_volume_alert_fallback_on_threshold_config_exception(cache_db):
+async def test_brave_search_volume_alert_fallback_on_threshold_config_exception(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -513,19 +574,19 @@ async def test_brave_search_volume_alert_fallback_on_threshold_config_exception(
                             await brave_search(
                                 "volume alert",
                                 mode="fresh",
-                                db_path=str(cache_db),
                                 config_manager=config,
                             )
     bound_logger.warning.assert_any_call(
         "search_volume_threshold_config_error",
         error="config backend unavailable",
     )
-    mock_claim.assert_awaited_once_with(db_path=str(cache_db), threshold=100)
+    mock_claim.assert_awaited_once_with(threshold=100)
     mock_enqueue.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_brave_search_volume_alert_skip_when_claim_not_acquired(cache_db):
+async def test_brave_search_volume_alert_skip_when_claim_not_acquired(web_db):
+    db_path, manager = web_db
     request = httpx.Request("GET", BRAVE_SEARCH_API_URL)
     response = httpx.Response(
         200,
@@ -558,8 +619,7 @@ async def test_brave_search_volume_alert_skip_when_claim_not_acquired(cache_db):
                         await brave_search(
                             "volume no-claim",
                             mode="fresh",
-                            db_path=str(cache_db),
                             config_manager=config,
                         )
-    mock_claim.assert_awaited_once_with(db_path=str(cache_db), threshold=3)
+    mock_claim.assert_awaited_once_with(threshold=3)
     mock_enqueue.assert_not_awaited()

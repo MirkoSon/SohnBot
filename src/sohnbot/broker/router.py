@@ -1203,20 +1203,9 @@ class BrokerRouter:
 
         if capability == "web":
             if action == "search":
-                db_path = "data/sohnbot.db"
-                if self.config_manager:
-                    try:
-                        db_path = str(self.config_manager.get("database.path"))
-                    except (TypeError, ValueError, KeyError) as exc:
-                        logger.warning("web_db_path_config_invalid", error=str(exc))
-                        db_path = "data/sohnbot.db"
-                    except RuntimeError as exc:
-                        logger.warning("web_db_path_config_error", error=str(exc))
-                        db_path = "data/sohnbot.db"
                 return await brave_search(
                     query=params["query"],
                     mode=params.get("mode", "fresh"),
-                    db_path=db_path,
                     config_manager=self.config_manager,
                 )
 

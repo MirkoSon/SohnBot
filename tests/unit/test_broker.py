@@ -1138,7 +1138,6 @@ async def test_web_search_success_routes_to_capability(mock_log_end, mock_log_st
     mock_search.assert_awaited_once_with(
         query="python asyncio",
         mode="fresh",
-        db_path="data/sohnbot.db",
         config_manager=None,
     )
     assert result.allowed is True
