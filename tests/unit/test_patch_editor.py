@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from sohnbot.capabilities.files.file_ops import FileCapabilityError
-from sohnbot.capabilities.files.patch_editor import PatchEditor
-from sohnbot.broker.scope_validator import ScopeValidator
+from src.sohnbot.capabilities.files.file_ops import FileCapabilityError
+from src.sohnbot.capabilities.files.patch_editor import PatchEditor
+from src.sohnbot.broker.scope_validator import ScopeValidator
 
 
 VALID_PATCH = """\

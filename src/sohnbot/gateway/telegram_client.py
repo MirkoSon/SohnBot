@@ -6,6 +6,7 @@ Handles Telegram Bot API integration with chat ID authentication.
 
 import structlog
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from .commands import (
@@ -19,6 +20,7 @@ from .commands import (
 )
 from .formatters import format_for_telegram
 from .notification_worker import NotificationWorker
+from .rate_limiter import RateLimiter
 
 logger = structlog.get_logger(__name__)
 
@@ -47,6 +49,14 @@ class TelegramClient:
         self.message_router = message_router
         self.application = None
         self.notification_worker = notification_worker
+        max_messages_per_minute = 30
+        config = getattr(getattr(message_router, "agent_session", None), "config", None)
+        if config is not None:
+            try:
+                max_messages_per_minute = int(config.get("telegram.max_messages_per_minute"))
+            except Exception:  # noqa: BLE001
+                max_messages_per_minute = 30
+        self._rate_limiter = RateLimiter(max_per_minute=max_messages_per_minute)
         broker = getattr(getattr(message_router, "agent_session", None), "broker", None)
         set_schedule_broker(broker)
 
@@ -128,7 +138,11 @@ class TelegramClient:
             message_length=len(message_text) if message_text else 0
         )
 
+        ack_msg = None
+        ack_finalized = False
         try:
+            ack_msg = await update.message.reply_text("Processing...")
+
             # Route to Claude Agent SDK runtime
             response = await self.message_router.route_to_runtime(
                 chat_id=str(chat_id),
@@ -137,8 +151,21 @@ class TelegramClient:
             )
 
             if not response.strip():
+                if ack_msg is not None:
+                    try:
+                        await ack_msg.delete()
+                        ack_finalized = True
+                    except BadRequest:
+                        pass
                 logger.info("telegram_response_suppressed", chat_id=chat_id)
                 return
+
+            if ack_msg is not None:
+                try:
+                    await ack_msg.delete()
+                    ack_finalized = True
+                except BadRequest:
+                    pass
 
             # Format and send response (handle 4096-char limit)
             formatted_messages = format_for_telegram(response)
@@ -159,9 +186,20 @@ class TelegramClient:
                 error=str(e),
                 error_type=type(e).__name__
             )
-            await update.message.reply_text(
-                "❌ An error occurred processing your request."
-            )
+            if ack_msg is not None:
+                try:
+                    await ack_msg.edit_text("❌ An error occurred processing your request.")
+                    ack_finalized = True
+                    return
+                except BadRequest:
+                    pass
+            await update.message.reply_text("❌ An error occurred processing your request.")
+        finally:
+            if ack_msg is not None and not ack_finalized:
+                try:
+                    await ack_msg.delete()
+                except BadRequest:
+                    pass
 
     async def cmd_start(self, update: Update, context):
         """Handle /start command."""
@@ -352,6 +390,7 @@ class TelegramClient:
             True if successful, False otherwise
         """
         try:
+            await self._rate_limiter.acquire()
             await self.application.bot.send_message(
                 chat_id=chat_id,
                 text=text

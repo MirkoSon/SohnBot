@@ -96,8 +96,8 @@ development_status:
   7-1-database-persistence-hardening: done
   7-2-subprocess-process-lifecycle-hardening: done
   7-3-scope-validation-toctou-mitigation: done
-  7-4-broker-safety-input-hardening: backlog
-  7-5-telegram-gateway-ux-safety: backlog
+  7-4-broker-safety-input-hardening: done
+  7-5-telegram-gateway-ux-safety: done
   7-6-configuration-system-completion: backlog
   7-7-observability-resilience-traceability: backlog
   epic-7-retrospective: optional

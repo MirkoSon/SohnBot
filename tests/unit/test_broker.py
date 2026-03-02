@@ -1,5 +1,6 @@
 """Unit tests for broker layer (scope validation, classification, routing)."""
 
+import asyncio
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1002,9 +1003,9 @@ async def test_profile_counter_increments_and_resets(mock_log_end, mock_log_star
             )
             assert result.allowed is True
 
-    assert router.get_profile_count("chat-a") == 3
-    router.reset_profile_counter("chat-a")
-    assert router.get_profile_count("chat-a") == 0
+    assert await router.get_profile_count("chat-a") == 3
+    await router.reset_profile_counter("chat-a")
+    assert await router.get_profile_count("chat-a") == 0
 
 
 @pytest.mark.asyncio
@@ -1057,7 +1058,42 @@ async def test_non_profile_operations_not_counted(mock_log_end, mock_log_start, 
         chat_id="chat-b",
     )
     assert result.allowed is True
-    assert router.get_profile_count("chat-b") == 0
+    assert await router.get_profile_count("chat-b") == 0
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_profile_counter_concurrency_limit_is_atomic(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    async def fake_lint(**_kwargs):
+        await asyncio.sleep(0.01)
+        return {"passed": True, "exit_code": 0, "stdout": "", "stderr": ""}
+
+    with patch("src.sohnbot.capabilities.command_profiles.execute_lint_profile", new=AsyncMock(side_effect=fake_lint)):
+        results = await asyncio.gather(
+            *[
+                router.route_operation(
+                    capability="profiles",
+                    action="lint",
+                    params={"repo_path": str(allowed_root), "files": []},
+                    chat_id="chat-concurrent",
+                )
+                for _ in range(20)
+            ]
+        )
+
+    allowed_count = sum(1 for result in results if result.allowed)
+    blocked_count = sum(
+        1 for result in results if (not result.allowed and result.error and result.error.get("code") == "profile_chain_limit_exceeded")
+    )
+    assert allowed_count == 5
+    assert blocked_count == 15
+    assert await router.get_profile_count("chat-concurrent") == 5
 
 
 @pytest.mark.asyncio

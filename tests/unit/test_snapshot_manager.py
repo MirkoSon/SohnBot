@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sohnbot.capabilities.git.snapshot_manager import GitCapabilityError, SnapshotManager
+from src.sohnbot.capabilities.git.snapshot_manager import GitCapabilityError, SnapshotManager
 
 
 @pytest.fixture

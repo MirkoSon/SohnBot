@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sohnbot.broker.router import BrokerRouter
-from sohnbot.broker.scope_validator import ScopeValidator
-from sohnbot.persistence.db import DatabaseManager, set_db_manager
-from sohnbot.persistence.notification import get_pending_notifications
+from src.sohnbot.broker.router import BrokerRouter
+from src.sohnbot.broker.scope_validator import ScopeValidator
+from src.sohnbot.persistence.db import DatabaseManager, set_db_manager
+from src.sohnbot.persistence.notification import get_pending_notifications
 from scripts.migrate import apply_migrations
 
 

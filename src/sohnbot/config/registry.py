@@ -162,6 +162,13 @@ REGISTRY: dict[str, ConfigKey] = {
         min_value=5,
         max_value=300,
     ),
+    "telegram.max_messages_per_minute": ConfigKey(
+        tier="dynamic",
+        value_type=int,
+        default=30,
+        min_value=5,
+        max_value=100,
+    ),
 
     # ===== BROKER (Dynamic - Operation timeout tuning) =====
     "broker.operation_timeout_seconds": ConfigKey(

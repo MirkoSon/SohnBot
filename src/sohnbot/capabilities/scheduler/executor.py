@@ -96,8 +96,43 @@ async def _scheduler_tick(now: datetime | None = None, max_concurrent_jobs: int 
         try:
             job_tz_now = current.astimezone(ZoneInfo(job_tz_name))
         except Exception:  # noqa: BLE001
-            logger.warning("scheduler_timezone_fallback_utc", timezone=job_tz_name, job_name=job.get("name"))
-            job_tz_now = current.astimezone(timezone.utc)
+            operation_id = str(uuid.uuid4())
+            logger.error(
+                "scheduler_invalid_timezone",
+                timezone=job_tz_name,
+                job_name=job.get("name"),
+            )
+            await log_operation_start(
+                operation_id=operation_id,
+                capability="scheduler",
+                action=str(job.get("action") or "unknown"),
+                chat_id="scheduler",
+                tier=1,
+            )
+            await log_operation_end(
+                operation_id=operation_id,
+                status="failed",
+                duration_ms=0,
+                error_details={
+                    "message": f"Invalid timezone: {job_tz_name}",
+                    "job_name": job.get("name"),
+                    "timezone": job_tz_name,
+                },
+            )
+            try:
+                await enqueue_notification(
+                    operation_id=operation_id,
+                    chat_id="scheduler",
+                    message_text=f"Job [{job.get('name')}] skipped: invalid timezone [{job_tz_name}]",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "scheduler_invalid_timezone_notification_failed",
+                    job_name=job.get("name"),
+                    timezone=job_tz_name,
+                    error=str(exc),
+                )
+            continue
         current_slot = _calculate_current_slot(str(job["cron_expr"]), job_tz_now)
         last_completed = int(job["last_completed_slot"] or 0)
         if current_slot > last_completed:

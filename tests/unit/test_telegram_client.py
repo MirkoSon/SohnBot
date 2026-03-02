@@ -130,9 +130,10 @@ class TestTelegramClient:
 
         await telegram_client.handle_message(mock_update, None)
 
-        # Should send error message
-        mock_update.message.reply_text.assert_called_once()
-        args = mock_update.message.reply_text.call_args[0]
+        # Should edit ack message to error text
+        ack_msg = mock_update.message.reply_text.return_value
+        ack_msg.edit_text.assert_awaited_once()
+        args = ack_msg.edit_text.await_args.args
         assert "error" in args[0].lower()
 
     @pytest.mark.asyncio
@@ -142,7 +143,52 @@ class TestTelegramClient:
 
         await telegram_client.handle_message(mock_update, None)
 
-        mock_update.message.reply_text.assert_not_called()
+        # Ack is sent and then deleted; no final response messages.
+        mock_update.message.reply_text.assert_awaited_once_with("Processing...")
+        ack_msg = mock_update.message.reply_text.return_value
+        ack_msg.delete.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_message_sends_ack_before_runtime(self, telegram_client, mock_update, message_router):
+        events: list[str] = []
+
+        async def reply_side_effect(text):
+            if text == "Processing...":
+                events.append("ack")
+                return AsyncMock()
+            events.append("final_response")
+            return AsyncMock()
+
+        async def route_side_effect(*args, **kwargs):
+            events.append("route")
+            return "ok"
+
+        mock_update.message.reply_text = AsyncMock(side_effect=reply_side_effect)
+        message_router.route_to_runtime.side_effect = route_side_effect
+
+        await telegram_client.handle_message(mock_update, None)
+        assert events[0] == "ack"
+        assert events[1] == "route"
+
+    @pytest.mark.asyncio
+    async def test_handle_message_deletes_ack_on_success(self, telegram_client, mock_update, message_router):
+        ack_msg = AsyncMock()
+        mock_update.message.reply_text = AsyncMock(return_value=ack_msg)
+        message_router.route_to_runtime.return_value = "done"
+
+        await telegram_client.handle_message(mock_update, None)
+
+        ack_msg.delete.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_message_edits_ack_on_failure(self, telegram_client, mock_update, message_router):
+        ack_msg = AsyncMock()
+        mock_update.message.reply_text = AsyncMock(return_value=ack_msg)
+        message_router.route_to_runtime.side_effect = RuntimeError("boom")
+
+        await telegram_client.handle_message(mock_update, None)
+
+        ack_msg.edit_text.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_send_message_success(self, telegram_client):
@@ -154,6 +200,18 @@ class TestTelegramClient:
 
         assert result is True
         telegram_client.application.bot.send_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_send_message_waits_for_rate_limiter(self, telegram_client):
+        telegram_client.application = AsyncMock()
+        telegram_client.application.bot.send_message = AsyncMock()
+        telegram_client._rate_limiter = AsyncMock()
+        telegram_client._rate_limiter.acquire = AsyncMock()
+
+        await telegram_client.send_message(123456789, "hello")
+
+        telegram_client._rate_limiter.acquire.assert_awaited_once()
+        telegram_client.application.bot.send_message.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_send_message_failure_logged(self, telegram_client):

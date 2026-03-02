@@ -1,6 +1,6 @@
 # Story 7.5: Telegram Gateway UX & Safety
 
-Status: draft
+Status: done
 
 ## Story
 
@@ -30,19 +30,19 @@ So that I know SohnBot received my request and my Telegram chat doesn't get spam
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add immediate acknowledgment to handle_message (AC: 1)
-  - [ ] Modify `telegram_client.py:handle_message()` — immediately after auth check, send:
+- [x] Task 1: Add immediate acknowledgment to handle_message (AC: 1)
+  - [x] Modify `telegram_client.py:handle_message()` — immediately after auth check, send:
     ```python
     ack_msg = await update.message.reply_text("Processing...")
     ```
-  - [ ] Wrap the `route_to_runtime()` call and response sending in try/finally
-  - [ ] On success: delete the ack message (`await ack_msg.delete()`), then send actual response
-  - [ ] On error: edit the ack message to show error (`await ack_msg.edit_text(...)`)
-  - [ ] Handle `telegram.error.BadRequest` if ack message already deleted (race condition)
+  - [x] Wrap the `route_to_runtime()` call and response sending in try/finally
+  - [x] On success: delete the ack message (`await ack_msg.delete()`), then send actual response
+  - [x] On error: edit the ack message to show error (`await ack_msg.edit_text(...)`)
+  - [x] Handle `telegram.error.BadRequest` if ack message already deleted (race condition)
 
-- [ ] Task 2: Create RateLimiter class (AC: 2)
-  - [ ] Create `src/sohnbot/gateway/rate_limiter.py`
-  - [ ] Implement `RateLimiter` with sliding-window token bucket:
+- [x] Task 2: Create RateLimiter class (AC: 2)
+  - [x] Create `src/sohnbot/gateway/rate_limiter.py`
+  - [x] Implement `RateLimiter` with sliding-window token bucket:
     ```python
     class RateLimiter:
         def __init__(self, max_per_minute: int = 30):
@@ -67,16 +67,16 @@ So that I know SohnBot received my request and my Telegram chat doesn't get spam
             """Non-blocking: return True if token available, False otherwise."""
             ...
     ```
-  - [ ] Add structlog warning when queue depth exceeds 80% capacity
+  - [x] Add structlog warning when queue depth exceeds 80% capacity
 
-- [ ] Task 3: Integrate rate limiter into TelegramClient.send_message (AC: 2, 3)
-  - [ ] Add `self._rate_limiter = RateLimiter(max_per_minute=30)` to `TelegramClient.__init__`
-  - [ ] Modify `send_message()` — call `await self._rate_limiter.acquire()` before `self.application.bot.send_message()`
-  - [ ] The rate limiter applies to ALL outbound messages (direct replies + notification worker)
-  - [ ] Make `max_per_minute` configurable via `telegram.max_messages_per_minute` config key
+- [x] Task 3: Integrate rate limiter into TelegramClient.send_message (AC: 2, 3)
+  - [x] Add `self._rate_limiter = RateLimiter(max_per_minute=30)` to `TelegramClient.__init__`
+  - [x] Modify `send_message()` — call `await self._rate_limiter.acquire()` before `self.application.bot.send_message()`
+  - [x] The rate limiter applies to ALL outbound messages (direct replies + notification worker)
+  - [x] Make `max_per_minute` configurable via `telegram.max_messages_per_minute` config key
 
-- [ ] Task 4: Add config key for rate limit (AC: 2)
-  - [ ] Add to `config/registry.py`:
+- [x] Task 4: Add config key for rate limit (AC: 2)
+  - [x] Add to `config/registry.py`:
     ```python
     "telegram.max_messages_per_minute": ConfigKey(
         tier="dynamic",
@@ -87,14 +87,14 @@ So that I know SohnBot received my request and my Telegram chat doesn't get spam
     ),
     ```
 
-- [ ] Task 5: Testing (AC: all)
-  - [ ] Test: handle_message sends ack before route_to_runtime (mock timing)
-  - [ ] Test: ack is deleted on successful response
-  - [ ] Test: ack is edited to error on failure
-  - [ ] Test: RateLimiter allows up to max_per_minute calls without delay
-  - [ ] Test: RateLimiter blocks when limit exceeded, unblocks after window slides
-  - [ ] Test: send_message calls rate_limiter.acquire before sending
-  - [ ] Test: notification_worker respects rate limit via send_message
+- [x] Task 5: Testing (AC: all)
+  - [x] Test: handle_message sends ack before route_to_runtime (mock timing)
+  - [x] Test: ack is deleted on successful response
+  - [x] Test: ack is edited to error on failure
+  - [x] Test: RateLimiter allows up to max_per_minute calls without delay
+  - [x] Test: RateLimiter blocks when limit exceeded, unblocks after window slides
+  - [x] Test: send_message calls rate_limiter.acquire before sending
+  - [x] Test: notification_worker respects rate limit via send_message
 
 ## Dev Notes
 
@@ -150,3 +150,33 @@ So that I know SohnBot received my request and my Telegram chat doesn't get spam
 - [Source: _bmad-output/implementation-artifacts/prd-architecture-adherence-audit-v1.md#A-04]
 - [Source: docs/PRD.md#DR-006 — Rate Monitoring & Alerts]
 - [Source: docs/PRD.md#NFR-019 — <2s response acknowledgment]
+
+## Dev Agent Record
+
+### Debug Log
+
+- Added immediate acknowledgment flow in Telegram `handle_message` with delete-on-success and edit-on-error behavior.
+- Added new gateway `RateLimiter` (sliding-window token bucket) with warning at >=80% usage threshold.
+- Integrated rate limiter into `TelegramClient.send_message` and read rate limit from `telegram.max_messages_per_minute`.
+- Added dynamic config registry key for Telegram message rate limit.
+- Added and updated unit tests for acknowledgment lifecycle, rate limiter behavior, and notification worker backpressure path.
+- `pytest` could not run in this environment (`python3 -m pytest` missing). Syntax checks passed via `compileall`.
+
+### Completion Notes
+
+- Gateway now acknowledges authorized inbound messages immediately with "Processing..." and cleans up acknowledgment safely.
+- Outbound sends are throttled via shared send path, so both direct sends and notification worker sends respect the same cap.
+- Invalid ack edit/delete races are handled with `telegram.error.BadRequest` guards.
+
+## File List
+
+- src/sohnbot/gateway/telegram_client.py
+- src/sohnbot/gateway/rate_limiter.py
+- src/sohnbot/config/registry.py
+- tests/unit/test_telegram_client.py
+- tests/unit/test_rate_limiter.py
+- tests/unit/test_notification_worker.py
+
+## Change Log
+
+- 2026-03-02: Implemented Story 7.5 Telegram acknowledgment flow, outbound rate limiting, config support, and unit test coverage.

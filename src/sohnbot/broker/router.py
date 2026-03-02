@@ -75,16 +75,19 @@ class BrokerRouter:
         self.file_ops = FileOps(scope_validator=scope_validator)
         self.patch_editor = PatchEditor(scope_validator=scope_validator)
         self.snapshot_manager = SnapshotManager()
+        self._state_lock = asyncio.Lock()
         self._operation_start_times: Dict[str, float] = {}
         self._profile_counts: Dict[str, int] = {}
 
-    def reset_profile_counter(self, chat_id: str) -> None:
+    async def reset_profile_counter(self, chat_id: str) -> None:
         """Reset profile execution counter for a chat/request boundary."""
-        self._profile_counts.pop(chat_id, None)
+        async with self._state_lock:
+            self._profile_counts.pop(chat_id, None)
 
-    def get_profile_count(self, chat_id: str) -> int:
+    async def get_profile_count(self, chat_id: str) -> int:
         """Get profile execution count for a chat."""
-        return int(self._profile_counts.get(chat_id, 0))
+        async with self._state_lock:
+            return int(self._profile_counts.get(chat_id, 0))
 
     async def route_operation(
         self,
@@ -117,7 +120,7 @@ class BrokerRouter:
         """
         # 1. Generate operation tracking ID
         operation_id = str(uuid.uuid4())
-        self._operation_start_times[operation_id] = datetime.now().timestamp()
+        await self._set_operation_start_time(operation_id)
 
         # 2. Classify operation tier
         file_count = self._count_files(params)
@@ -126,15 +129,24 @@ class BrokerRouter:
             tier = 0
 
         if capability == "profiles":
-            current_count = self._profile_counts.get(chat_id, 0)
             max_chain_length = 5
             if self.config_manager:
                 try:
                     max_chain_length = int(self.config_manager.get("commands.max_chain_length"))
                 except Exception:  # noqa: BLE001
                     pass
-            if current_count >= max_chain_length:
-                self._operation_start_times.pop(operation_id, None)
+
+            async with self._state_lock:
+                current_count = self._profile_counts.get(chat_id, 0)
+                if current_count >= max_chain_length:
+                    allowed = False
+                else:
+                    self._profile_counts[chat_id] = current_count + 1
+                    updated_count = self._profile_counts[chat_id]
+                    allowed = True
+
+            if not allowed:
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -152,11 +164,10 @@ class BrokerRouter:
                         "retryable": False,
                     },
                 )
-            self._profile_counts[chat_id] = current_count + 1
             logger.info(
                 "profile_counter_incremented",
                 chat_id=chat_id,
-                count=self._profile_counts[chat_id],
+                count=updated_count,
                 max_chain_length=max_chain_length,
             )
 
@@ -164,7 +175,7 @@ class BrokerRouter:
         if capability == "fs":
             # Validate required parameters
             if action in {"read", "list", "search", "apply_patch"} and "path" not in params:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -181,7 +192,7 @@ class BrokerRouter:
             if action == "search":
                 pattern = params.get("pattern", "")
                 if not pattern or not isinstance(pattern, str):
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -198,7 +209,7 @@ class BrokerRouter:
             if action == "apply_patch":
                 patch_content = params.get("patch", "")
                 if not patch_content or not isinstance(patch_content, str):
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -234,7 +245,7 @@ class BrokerRouter:
                         allowed_roots=allowed_roots,
                     )
                     # Clean up operation start time to prevent memory leak
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -255,7 +266,7 @@ class BrokerRouter:
         if capability == "git":
             # Validate required parameters
             if action == "commit" and ("repo_path" not in params or "message" not in params):
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -269,7 +280,7 @@ class BrokerRouter:
                 )
 
             if action == "checkout" and ("repo_path" not in params or "branch_name" not in params):
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -283,7 +294,7 @@ class BrokerRouter:
                 )
 
             if action == "status" and "repo_path" not in params:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -297,7 +308,7 @@ class BrokerRouter:
                 )
 
             if action == "diff" and "repo_path" not in params:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -311,7 +322,7 @@ class BrokerRouter:
                 )
 
             if action == "list_snapshots" and "repo_path" not in params:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -325,7 +336,7 @@ class BrokerRouter:
                 )
 
             if action == "prune_snapshots" and "repo_path" not in params:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -340,7 +351,7 @@ class BrokerRouter:
 
             if action == "rollback":
                 if "repo_path" not in params or "snapshot_ref" not in params:
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -370,7 +381,7 @@ class BrokerRouter:
                         normalized_path=normalized_path,
                         allowed_roots=allowed_roots,
                     )
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -392,7 +403,7 @@ class BrokerRouter:
                 required = {"name", "cron_expr", "timezone", "action"}
                 missing = sorted([key for key in required if key not in params])
                 if missing:
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -405,7 +416,7 @@ class BrokerRouter:
                         },
                     )
             if action == "delete" and "job_id" not in params and "name" not in params:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -418,7 +429,7 @@ class BrokerRouter:
                     },
                 )
             if action in {"disable", "enable"} and "name" not in params and "job_id" not in params:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -432,7 +443,7 @@ class BrokerRouter:
                 )
             if action == "edit":
                 if "name" not in params and "job_id" not in params:
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -445,7 +456,7 @@ class BrokerRouter:
                         },
                     )
                 if "updates" not in params or not isinstance(params.get("updates"), dict):
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -461,7 +472,7 @@ class BrokerRouter:
         # Profiles capability parameter validation and scope checking
         if capability == "profiles":
             if action in {"lint", "build", "test", "ripgrep"} and "repo_path" not in params:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -476,7 +487,7 @@ class BrokerRouter:
 
             repo_path = params.get("repo_path")
             if not repo_path or not str(repo_path).strip():
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -503,7 +514,7 @@ class BrokerRouter:
                     normalized_path=normalized_path,
                     allowed_roots=allowed_roots,
                 )
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -524,7 +535,7 @@ class BrokerRouter:
             for f in files:
                 from pathlib import PurePosixPath
                 if ".." in PurePosixPath(str(f)).parts:
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -540,7 +551,7 @@ class BrokerRouter:
             target = params.get("target") or ""
             if target:
                 if not _SAFE_PROFILE_RE.match(target):
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -557,7 +568,7 @@ class BrokerRouter:
             if pattern:
                 from pathlib import PurePosixPath
                 if action != "ripgrep" and ".." in PurePosixPath(str(pattern)).parts:
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -570,7 +581,7 @@ class BrokerRouter:
                         },
                     )
                 if action != "ripgrep" and not _SAFE_PROFILE_RE.match(pattern):
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -584,7 +595,7 @@ class BrokerRouter:
                     )
             if action == "ripgrep":
                 if "pattern" not in params or not isinstance(params.get("pattern"), str) or not params.get("pattern"):
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -599,7 +610,7 @@ class BrokerRouter:
                 if "file_types" in params and params.get("file_types") is not None:
                     file_types = params.get("file_types")
                     if not isinstance(file_types, list) or not all(isinstance(item, str) for item in file_types):
-                        self._operation_start_times.pop(operation_id, None)
+                        await self._remove_operation_start_time(operation_id)
                         return BrokerResult(
                             allowed=False,
                             operation_id=operation_id,
@@ -614,7 +625,7 @@ class BrokerRouter:
 
         if capability == "web":
             if action != "search":
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -629,7 +640,7 @@ class BrokerRouter:
 
             query = params.get("query")
             if not isinstance(query, str) or not query.strip():
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -642,7 +653,7 @@ class BrokerRouter:
                     },
                 )
             if len(query.strip()) > 500:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -657,7 +668,7 @@ class BrokerRouter:
 
             mode = params.get("mode", "fresh")
             if mode not in {"fresh", "static"}:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -675,7 +686,7 @@ class BrokerRouter:
 
         if capability == "observe":
             if action != "logs":
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -691,7 +702,7 @@ class BrokerRouter:
             try:
                 hours = int(params.get("hours", 24))
             except (TypeError, ValueError):
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -704,7 +715,7 @@ class BrokerRouter:
                     },
                 )
             if hours < 1 or hours > 720:
-                self._operation_start_times.pop(operation_id, None)
+                await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
                     operation_id=operation_id,
@@ -721,7 +732,7 @@ class BrokerRouter:
             if "capability" in params and params.get("capability") is not None:
                 capability_filter = params.get("capability")
                 if not isinstance(capability_filter, str) or not capability_filter.strip():
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -738,7 +749,7 @@ class BrokerRouter:
             if "status" in params and params.get("status") is not None:
                 status_filter = params.get("status")
                 if not isinstance(status_filter, str) or status_filter not in _OBSERVE_LOG_STATUS_FILTERS:
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -758,7 +769,7 @@ class BrokerRouter:
             if "chat_id" in params and params.get("chat_id") is not None:
                 chat_filter = params.get("chat_id")
                 if not isinstance(chat_filter, str) or not chat_filter.strip():
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -776,7 +787,7 @@ class BrokerRouter:
                 try:
                     tier_filter = int(params["tier"])
                 except (TypeError, ValueError):
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -789,7 +800,7 @@ class BrokerRouter:
                         },
                     )
                 if tier_filter not in {0, 1, 2, 3}:
-                    self._operation_start_times.pop(operation_id, None)
+                    await self._remove_operation_start_time(operation_id)
                     return BrokerResult(
                         allowed=False,
                         operation_id=operation_id,
@@ -854,7 +865,7 @@ class BrokerRouter:
                     )
 
             # 7. Log operation end (success)
-            duration_ms = self._calculate_duration(operation_id)
+            duration_ms = await self._calculate_duration(operation_id)
             await log_operation_end(
                 operation_id=operation_id,
                 status="completed",
@@ -885,7 +896,7 @@ class BrokerRouter:
 
         except asyncio.TimeoutError:
             # Log operation end (timeout)
-            duration_ms = self._calculate_duration(operation_id)
+            duration_ms = await self._calculate_duration(operation_id)
             await log_operation_end(
                 operation_id=operation_id,
                 status="failed",
@@ -915,7 +926,7 @@ class BrokerRouter:
 
         except (FileCapabilityError, GitCapabilityError, WebCapabilityError) as e:
             # Log operation end (capability validation/runtime error)
-            duration_ms = self._calculate_duration(operation_id)
+            duration_ms = await self._calculate_duration(operation_id)
             await log_operation_end(
                 operation_id=operation_id,
                 status="failed",
@@ -941,7 +952,7 @@ class BrokerRouter:
 
         except Exception as e:
             # Log operation end (error)
-            duration_ms = self._calculate_duration(operation_id)
+            duration_ms = await self._calculate_duration(operation_id)
             await log_operation_end(
                 operation_id=operation_id,
                 status="failed",
@@ -985,22 +996,22 @@ class BrokerRouter:
             return len(params["paths"])
         return 0
 
-    def _calculate_duration(self, operation_id: str) -> int:
-        """
-        Calculate operation duration in milliseconds.
+    async def _set_operation_start_time(self, operation_id: str) -> None:
+        async with self._state_lock:
+            self._operation_start_times[operation_id] = datetime.now().timestamp()
 
-        Args:
-            operation_id: Operation UUID
+    async def _remove_operation_start_time(self, operation_id: str) -> None:
+        async with self._state_lock:
+            self._operation_start_times.pop(operation_id, None)
 
-        Returns:
-            Duration in milliseconds
-        """
-        if operation_id in self._operation_start_times:
-            start_time = self._operation_start_times[operation_id]
-            duration_seconds = datetime.now().timestamp() - start_time
-            del self._operation_start_times[operation_id]
-            return int(duration_seconds * 1000)
-        return 0
+    async def _calculate_duration(self, operation_id: str) -> int:
+        async with self._state_lock:
+            if operation_id in self._operation_start_times:
+                start_time = self._operation_start_times[operation_id]
+                duration_seconds = datetime.now().timestamp() - start_time
+                del self._operation_start_times[operation_id]
+                return int(duration_seconds * 1000)
+            return 0
 
     async def _create_snapshot(
         self, operation_id: str, file_path: Optional[str] = None

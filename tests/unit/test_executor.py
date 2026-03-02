@@ -14,6 +14,7 @@ from src.sohnbot.capabilities.scheduler.executor import (
     _calculate_current_slot,
     _execute_job_batch,
     _execute_single_job,
+    _scheduler_tick,
     _send_timeout_notification,
 )
 from src.sohnbot.capabilities.scheduler.job_manager import create_job
@@ -122,6 +123,74 @@ async def test_concurrent_limit():
         await _execute_job_batch(jobs_to_run=jobs, max_concurrent_jobs=3)
 
     assert max_active <= 3
+
+
+@pytest.mark.asyncio
+async def test_invalid_timezone_job_is_skipped_and_notification_sent():
+    now = datetime(2026, 3, 1, 9, 0, 0, tzinfo=timezone.utc)
+    bad_job = {
+        "id": "job-bad",
+        "name": "bad-tz",
+        "cron_expr": "* * * * *",
+        "timezone": "Invalid/Nonexistent",
+        "last_completed_slot": 0,
+        "action": "heartbeat",
+    }
+
+    with (
+        patch("src.sohnbot.capabilities.scheduler.executor.list_jobs", new=AsyncMock(return_value=[bad_job])),
+        patch("src.sohnbot.capabilities.scheduler.executor._execute_job_batch", new=AsyncMock()) as mock_batch,
+        patch("src.sohnbot.capabilities.scheduler.executor.enqueue_notification", new=AsyncMock()) as mock_notify,
+        patch("src.sohnbot.capabilities.scheduler.executor.log_operation_start", new=AsyncMock()) as mock_start,
+        patch("src.sohnbot.capabilities.scheduler.executor.log_operation_end", new=AsyncMock()) as mock_end,
+    ):
+        await _scheduler_tick(now=now, max_concurrent_jobs=3)
+
+    mock_batch.assert_not_awaited()
+    mock_notify.assert_awaited_once()
+    message = mock_notify.await_args.kwargs["message_text"]
+    assert "skipped: invalid timezone" in message
+    mock_start.assert_awaited_once()
+    mock_end.assert_awaited_once()
+    assert mock_end.await_args.kwargs["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_invalid_timezone_does_not_block_other_due_jobs():
+    now = datetime(2026, 3, 1, 9, 0, 0, tzinfo=timezone.utc)
+    jobs = [
+        {
+            "id": "job-bad",
+            "name": "bad-tz",
+            "cron_expr": "* * * * *",
+            "timezone": "Invalid/Nonexistent",
+            "last_completed_slot": 0,
+            "action": "heartbeat",
+        },
+        {
+            "id": "job-good",
+            "name": "good-tz",
+            "cron_expr": "* * * * *",
+            "timezone": "UTC",
+            "last_completed_slot": 0,
+            "action": "heartbeat",
+        },
+    ]
+
+    with (
+        patch("src.sohnbot.capabilities.scheduler.executor.list_jobs", new=AsyncMock(return_value=jobs)),
+        patch("src.sohnbot.capabilities.scheduler.executor._execute_job_batch", new=AsyncMock()) as mock_batch,
+        patch("src.sohnbot.capabilities.scheduler.executor.enqueue_notification", new=AsyncMock()) as mock_notify,
+        patch("src.sohnbot.capabilities.scheduler.executor.log_operation_start", new=AsyncMock()),
+        patch("src.sohnbot.capabilities.scheduler.executor.log_operation_end", new=AsyncMock()),
+    ):
+        await _scheduler_tick(now=now, max_concurrent_jobs=3)
+
+    mock_notify.assert_awaited_once()
+    mock_batch.assert_awaited_once()
+    due_jobs = mock_batch.await_args.args[0]
+    assert len(due_jobs) == 1
+    assert due_jobs[0]["id"] == "job-good"
 
 
 @pytest.mark.asyncio

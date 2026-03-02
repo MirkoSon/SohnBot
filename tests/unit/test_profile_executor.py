@@ -734,3 +734,46 @@ async def test_timeout_kills_process_group_on_posix():
     assert mock_killpg.call_count >= 1
     first_call = mock_killpg.call_args_list[0]
     assert first_call.args == (4321, signal.SIGTERM)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("runner", "kwargs"),
+    [
+        ("execute_lint_profile", {"repo_path": "/repo", "command": "/usr/bin/pylint", "files": []}),
+        ("execute_build_profile", {"repo_path": "/repo", "command": "../make", "target": ""}),
+        ("execute_test_profile", {"repo_path": "/repo", "command": "evil-binary", "pattern": ""}),
+        ("execute_ripgrep_profile", {"repo_path": "/repo", "pattern": "needle", "command": "C:\\\\rg.exe"}),
+    ],
+)
+async def test_disallowed_profile_commands_are_rejected_and_logged(runner, kwargs):
+    module = __import__(
+        "src.sohnbot.capabilities.command_profiles.profile_executor",
+        fromlist=[runner],
+    )
+    fn = getattr(module, runner)
+
+    with patch("src.sohnbot.capabilities.command_profiles.profile_executor.logger.warning") as mock_warn:
+        with pytest.raises(ValueError):
+            await fn(**kwargs)
+
+    mock_warn.assert_called_once()
+    assert mock_warn.call_args.args[0] == "profile_command_rejected"
+
+
+@pytest.mark.asyncio
+async def test_allowed_ripgrep_command_is_accepted():
+    from src.sohnbot.capabilities.command_profiles.profile_executor import execute_ripgrep_profile
+
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 1
+    mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        result = await execute_ripgrep_profile(
+            repo_path="/repo",
+            pattern="needle",
+            command="rg",
+        )
+
+    assert result["command_used"].startswith("rg ")

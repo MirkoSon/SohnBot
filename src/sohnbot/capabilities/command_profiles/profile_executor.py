@@ -9,6 +9,44 @@ import sys
 
 logger = structlog.get_logger(__name__)
 
+ALLOWED_PROFILE_COMMANDS = frozenset(
+    {
+        "pylint",
+        "flake8",
+        "ruff",
+        "eslint",
+        "mypy",
+        "black",
+        "isort",
+        "pytest",
+        "python",
+        "npm",
+        "npx",
+        "node",
+        "make",
+        "cargo",
+        "go",
+        "rg",
+        "tsc",
+        "prettier",
+        "biome",
+    }
+)
+
+
+def _validate_command(command: str) -> tuple[bool, str]:
+    """Validate command binary against safe allowlist and traversal checks."""
+    stripped = (command or "").strip()
+    if not stripped:
+        return False, "Command must not be empty"
+
+    binary = stripped.split()[0]
+    if "/" in binary or "\\" in binary or ".." in binary:
+        return False, "Command binary must not contain path separators or traversal tokens"
+    if binary not in ALLOWED_PROFILE_COMMANDS:
+        return False, f"Command '{binary}' is not in the allowed profile command list"
+    return True, ""
+
 
 async def _kill_process_group(proc: asyncio.subprocess.Process, grace_seconds: float = 0.5) -> None:
     """Terminate subprocess tree; SIGTERM first, then SIGKILL fallback on POSIX."""
@@ -75,6 +113,16 @@ async def execute_lint_profile(
     Raises:
         TimeoutError: When subprocess exceeds timeout_seconds; process is killed.
     """
+    is_valid, error_message = _validate_command(command)
+    if not is_valid:
+        logger.warning(
+            "profile_command_rejected",
+            command=command,
+            reason=error_message,
+            security_event=True,
+        )
+        raise ValueError(error_message)
+
     cmd_parts = command.split() + files
 
     logger.info(
@@ -159,6 +207,16 @@ async def execute_build_profile(
     Raises:
         TimeoutError: When subprocess exceeds timeout_seconds; process is killed.
     """
+    is_valid, error_message = _validate_command(command)
+    if not is_valid:
+        logger.warning(
+            "profile_command_rejected",
+            command=command,
+            reason=error_message,
+            security_event=True,
+        )
+        raise ValueError(error_message)
+
     cmd_parts = command.split()
     if target:
         cmd_parts.append(target)
@@ -247,6 +305,16 @@ async def execute_test_profile(
     Raises:
         TimeoutError: When subprocess exceeds timeout_seconds; process is killed.
     """
+    is_valid, error_message = _validate_command(command)
+    if not is_valid:
+        logger.warning(
+            "profile_command_rejected",
+            command=command,
+            reason=error_message,
+            security_event=True,
+        )
+        raise ValueError(error_message)
+
     cmd_parts = command.split()
     if pattern:
         cmd_parts.append(pattern)
@@ -313,6 +381,16 @@ async def execute_ripgrep_profile(
     command: str = "rg",
 ) -> dict:
     """Run ripgrep search with JSON output parsing and timeout enforcement."""
+    is_valid, error_message = _validate_command(command)
+    if not is_valid:
+        logger.warning(
+            "profile_command_rejected",
+            command=command,
+            reason=error_message,
+            security_event=True,
+        )
+        raise ValueError(error_message)
+
     cmd_parts = [command, "--json"]
     if file_types:
         for file_type in file_types:

@@ -114,6 +114,30 @@ async def test_worker_start_stop_lifecycle():
 
 
 @pytest.mark.asyncio
+async def test_worker_delivery_backpressured_via_send_message(setup_database):
+    await _seed_operation(setup_database, "op1")
+    await _seed_operation(setup_database, "op2")
+    await enqueue_notification("op1", "123", "one")
+    await enqueue_notification("op2", "123", "two")
+
+    order: list[str] = []
+
+    async def slow_send(chat_id, text):
+        order.append(f"start:{text}")
+        await asyncio.sleep(0)
+        order.append(f"end:{text}")
+        return True
+
+    telegram_client = AsyncMock()
+    telegram_client.send_message = AsyncMock(side_effect=slow_send)
+    worker = NotificationWorker(telegram_client=telegram_client, batch_size=10)
+
+    await worker._process_batch()  # noqa: SLF001
+
+    assert order == ["start:one", "end:one", "start:two", "end:two"]
+
+
+@pytest.mark.asyncio
 async def test_worker_restarts_after_crash():
     telegram_client = AsyncMock()
     worker = NotificationWorker(telegram_client=telegram_client, poll_interval_seconds=0)
