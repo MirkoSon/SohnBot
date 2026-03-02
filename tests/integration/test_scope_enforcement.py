@@ -210,29 +210,29 @@ class TestBrokerScopeEnforcement:
 
     @pytest.mark.asyncio
     async def test_broker_does_not_validate_non_file_operations(self, broker, setup_database):
-        """Non-file operations (git, scheduler, etc.) bypass scope validation."""
-        # Git operations should not trigger scope validation
+        """Scheduler operations bypass scope validation (git operations do validate scope)."""
+        # Scheduler operations should not trigger scope validation
         result = await broker.route_operation(
-            capability="git",
-            action="status",
+            capability="scheduler",
+            action="list",
             params={},
             chat_id="test_user"
         )
 
-        # Should be allowed (capability not implemented, but no scope error)
+        # Should be allowed (no scope validation for scheduler operations)
         assert result.allowed is True
 
     @pytest.mark.asyncio
     async def test_broker_validates_only_fs_capability(self, broker, temp_allowed_root, setup_database):
-        """Only fs capability triggers scope validation."""
-        # Verify git read-only operations bypass scope validation (Tier 0, no snapshot needed)
-        result_git = await broker.route_operation(
-            capability="git",
-            action="status",
+        """Both fs and git capabilities validate scope; scheduler does not."""
+        # Verify scheduler operations bypass scope validation
+        result_scheduler = await broker.route_operation(
+            capability="scheduler",
+            action="list",
             params={},
             chat_id="test_user"
         )
-        assert result_git.allowed is True  # No scope check for git
+        assert result_scheduler.allowed is True  # No scope check for scheduler
 
         # Verify fs capability DOES validate paths
         result_fs = await broker.route_operation(
@@ -242,3 +242,4 @@ class TestBrokerScopeEnforcement:
             chat_id="test_user"
         )
         assert result_fs.allowed is False  # Scope check blocks invalid path
+        assert result_fs.error["code"] == "scope_violation"

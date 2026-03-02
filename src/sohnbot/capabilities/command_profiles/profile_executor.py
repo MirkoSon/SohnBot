@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import shutil
 import signal
 import structlog
 import sys
@@ -35,7 +36,7 @@ ALLOWED_PROFILE_COMMANDS = frozenset(
 
 
 def _validate_command(command: str) -> tuple[bool, str]:
-    """Validate command binary against safe allowlist and traversal checks."""
+    """Validate command binary against safe allowlist, traversal checks, and PATH availability."""
     stripped = (command or "").strip()
     if not stripped:
         return False, "Command must not be empty"
@@ -45,6 +46,12 @@ def _validate_command(command: str) -> tuple[bool, str]:
         return False, "Command binary must not contain path separators or traversal tokens"
     if binary not in ALLOWED_PROFILE_COMMANDS:
         return False, f"Command '{binary}' is not in the allowed profile command list"
+
+    # Verify the binary is actually installed and on PATH
+    resolved = shutil.which(binary)
+    if resolved is None:
+        return False, f"Command '{binary}' is in the allowlist but was not found on PATH"
+
     return True, ""
 
 

@@ -21,7 +21,9 @@
       "Bash(wc:*)",
       "Bash(.venv/Scripts/python:*)",
       "Bash(.venv/bin/python:*)",
-      "Bash(.venv/bin/pytest:*)"
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(grep:*)",
+      "Bash(where rg:*)"
     ]
   }
 }

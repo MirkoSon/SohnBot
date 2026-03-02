@@ -284,7 +284,22 @@ async def _execute_single_job(job: dict[str, Any]) -> None:
     timeout_seconds = _get_job_timeout_seconds()
 
     job_tz_name = str(job.get("timezone") or "UTC")
-    job_now = _utc_now().astimezone(ZoneInfo(job_tz_name))
+    try:
+        job_now = _utc_now().astimezone(ZoneInfo(job_tz_name))
+    except (KeyError, Exception) as exc:
+        logger.error(
+            "scheduler_job_timezone_failed",
+            timezone=job_tz_name,
+            job_name=job.get("name"),
+            error=str(exc),
+        )
+        await log_operation_end(
+            operation_id=operation_id,
+            status="failed",
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            error_details={"message": f"Invalid timezone in execution: {job_tz_name}"},
+        )
+        return
     slot_timestamp = int(job.get("_slot_timestamp") or _calculate_current_slot(str(job["cron_expr"]), job_now))
 
     await log_operation_start(

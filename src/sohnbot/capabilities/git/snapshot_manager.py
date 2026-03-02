@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,6 +14,21 @@ from typing import Any
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+
+async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill the subprocess and its entire process group."""
+    if proc.returncode is not None:
+        return
+    if sys.platform != "win32":
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    if proc.returncode is None:
+        proc.kill()
+    await proc.wait()
 
 
 @dataclass
@@ -136,6 +154,7 @@ class SnapshotManager:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise GitCapabilityError(
@@ -150,8 +169,7 @@ class SnapshotManager:
                 process.communicate(), timeout=timeout_seconds
             )
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await _kill_process_tree(process)
             raise GitCapabilityError(
                 code="snapshot_timeout",
                 message=f"Git snapshot creation timed out after {timeout_seconds}s",
@@ -200,6 +218,7 @@ class SnapshotManager:
                 "snapshot/*",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
         except FileNotFoundError as exc:
@@ -210,8 +229,7 @@ class SnapshotManager:
                 retryable=False,
             ) from exc
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await _kill_process_tree(process)
             raise GitCapabilityError(
                 code="list_snapshots_failed",
                 message="Git list snapshots command timed out",
@@ -409,6 +427,7 @@ class SnapshotManager:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise GitCapabilityError(
@@ -423,8 +442,7 @@ class SnapshotManager:
                 timeout=remaining,
             )
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await _kill_process_tree(process)
             raise GitCapabilityError(
                 code=timeout_code,
                 message="Git prune operation timed out",
@@ -516,6 +534,7 @@ class SnapshotManager:
                 *verify_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise GitCapabilityError(
@@ -530,8 +549,7 @@ class SnapshotManager:
                 process.communicate(), timeout=timeout_seconds
             )
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await _kill_process_tree(process)
             raise GitCapabilityError(
                 code="snapshot_timeout",
                 message=f"Git rollback operation timed out after {timeout_seconds}s",
@@ -558,6 +576,7 @@ class SnapshotManager:
             *checkout_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
 
         try:
@@ -565,8 +584,7 @@ class SnapshotManager:
                 process.communicate(), timeout=timeout_seconds
             )
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await _kill_process_tree(process)
             raise GitCapabilityError(
                 code="snapshot_timeout",
                 message=f"Git checkout timed out after {timeout_seconds}s",
@@ -594,6 +612,7 @@ class SnapshotManager:
             *commit_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
 
         try:
@@ -601,8 +620,7 @@ class SnapshotManager:
                 process.communicate(), timeout=timeout_seconds
             )
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            await _kill_process_tree(process)
             raise GitCapabilityError(
                 code="snapshot_timeout",
                 message=f"Git commit timed out after {timeout_seconds}s",
@@ -627,6 +645,7 @@ class SnapshotManager:
                     *head_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
                 )
                 stdout, _ = await asyncio.wait_for(
                     process.communicate(), timeout=timeout_seconds
@@ -657,6 +676,7 @@ class SnapshotManager:
             *hash_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         stdout, _ = await asyncio.wait_for(
             process.communicate(), timeout=timeout_seconds
@@ -669,6 +689,7 @@ class SnapshotManager:
             *diff_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
         stdout, _ = await asyncio.wait_for(
             process.communicate(), timeout=timeout_seconds

@@ -138,5 +138,5 @@ async def test_http_server_endpoints_and_shutdown():
     await stop_http_server()
 
     async with httpx.AsyncClient(timeout=2.0) as client:
-        with pytest.raises(httpx.ConnectError):
+        with pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
             await client.get(f"{base_url}/status")

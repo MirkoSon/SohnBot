@@ -1,5 +1,6 @@
 """Integration tests for Story 1.5 file read operations through broker."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -74,7 +75,11 @@ async def test_broker_read_rejects_binary_file(tmp_path, setup_database):
 async def test_broker_search_respects_scope_and_returns_results(tmp_path, setup_database):
     root = tmp_path / "Projects"
     root.mkdir()
-    (root / "todo.txt").write_text("alpha\nneedle\n")
+    test_file = root / "todo.txt"
+    test_file.write_text("alpha\nneedle\n")
+
+    # Wait for filesystem I/O to complete (Windows async writes)
+    await asyncio.sleep(0.1)
 
     router = BrokerRouter(ScopeValidator([str(root)]))
     result = await router.route_operation(

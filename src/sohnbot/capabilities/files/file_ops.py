@@ -255,8 +255,25 @@ class FileOps:
         output = stdout.decode("utf-8", errors="replace")
         for line in output.splitlines():
             # Format: path:line_number:content
+            # On Windows, paths may contain drive letters (C:\...), so we need to handle colons carefully
             try:
-                file_path, line_no, content = line.split(":", 2)
+                # Split into at most 3 parts, but account for Windows drive letters
+                parts = line.split(":")
+                if len(parts) < 3:
+                    continue  # Malformed line
+
+                # If first part is a single letter (Windows drive), rejoin it with the second part
+                if len(parts[0]) == 1 and parts[0].isalpha():
+                    # Windows path: C:\path\file:line:content
+                    file_path = parts[0] + ":" + parts[1]
+                    line_no = parts[2]
+                    content = ":".join(parts[3:]) if len(parts) > 3 else ""
+                else:
+                    # Unix path: /path/file:line:content
+                    file_path = parts[0]
+                    line_no = parts[1]
+                    content = ":".join(parts[2:])
+
                 matches.append(
                     {
                         "path": file_path,
@@ -264,7 +281,7 @@ class FileOps:
                         "content": content,
                     }
                 )
-            except ValueError:
+            except (ValueError, IndexError):
                 # Ignore malformed output line instead of failing the whole search.
                 continue
 

@@ -5,6 +5,8 @@ In-process MCP server with @tool decorators for Claude Agent SDK.
 All tools route through the Broker layer for policy enforcement.
 """
 
+from typing import Any
+
 import structlog
 from claude_agent_sdk import create_sdk_mcp_server, tool
 from structlog.contextvars import get_contextvars
@@ -14,9 +16,24 @@ from ..capabilities.observe import (
     get_resource_snapshot_data,
     get_status_snapshot_data,
 )
+from ..capabilities.result_types import CapabilityResult
 from ..capabilities.scheduler.timezone_handler import get_dst_transition_count
 
 logger = structlog.get_logger(__name__)
+
+
+def _get_result_value(result: CapabilityResult | dict | None, key: str, default: Any = None) -> Any:
+    """
+    Extract value from either typed result or dict.
+
+    Supports both attribute access (typed results) and dict access for backward compatibility.
+    """
+    if result is None:
+        return default
+    if isinstance(result, dict):
+        return result.get(key, default)
+    # Typed result - use attribute access
+    return getattr(result, key, default)
 
 
 def create_sohnbot_mcp_server(broker, config):
@@ -34,11 +51,11 @@ def create_sohnbot_mcp_server(broker, config):
     def _as_mcp_text(text: str) -> dict:
         return {"content": [{"type": "text", "text": text}]}
 
-    def _format_file_result(action: str, result: dict) -> str:
+    def _format_file_result(action: str, result: CapabilityResult | dict) -> str:
         if action == "read":
-            return result.get("content", "")
+            return _get_result_value(result, "content", "")
         if action == "list":
-            files = result.get("files", [])
+            files = _get_result_value(result, "files", [])
             if not files:
                 return "No files found."
             lines = [
@@ -47,7 +64,7 @@ def create_sohnbot_mcp_server(broker, config):
             ]
             return "\n".join(lines)
         if action == "search":
-            matches = result.get("matches", [])
+            matches = _get_result_value(result, "matches", [])
             if not matches:
                 return "No matches found."
             lines = [
@@ -56,9 +73,9 @@ def create_sohnbot_mcp_server(broker, config):
             ]
             return "\n".join(lines)
         if action == "apply_patch":
-            path = result.get("path", "?")
-            added = result.get("lines_added", 0)
-            removed = result.get("lines_removed", 0)
+            path = _get_result_value(result, "path", "?")
+            added = _get_result_value(result, "lines_added", 0)
+            removed = _get_result_value(result, "lines_removed", 0)
             return f"Patch applied to {path}. Lines: +{added}/-{removed}"
         return str(result)
 
@@ -196,7 +213,7 @@ def create_sohnbot_mcp_server(broker, config):
         )
 
         if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
+            error_msg = (result.error or {}).get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__status", error=error_msg)
             return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
@@ -246,7 +263,7 @@ def create_sohnbot_mcp_server(broker, config):
         )
 
         if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
+            error_msg = (result.error or {}).get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__diff", error=error_msg)
             return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
@@ -292,7 +309,7 @@ def create_sohnbot_mcp_server(broker, config):
         )
 
         if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
+            error_msg = (result.error or {}).get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__commit", error=error_msg)
             return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
@@ -320,12 +337,12 @@ def create_sohnbot_mcp_server(broker, config):
         )
 
         if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
+            error_msg = (result.error or {}).get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__list_snapshots", error=error_msg)
             return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
-        snapshots = result.result.get("snapshots", [])
-        total_count = result.result.get("total_count", len(snapshots))
+        snapshots = _get_result_value(result.result, "snapshots", [])
+        total_count = _get_result_value(result.result, "total_count", len(snapshots))
         if not snapshots:
             return _as_mcp_text("No snapshots found.")
 
@@ -367,7 +384,7 @@ def create_sohnbot_mcp_server(broker, config):
         )
 
         if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
+            error_msg = (result.error or {}).get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__prune_snapshots", error=error_msg)
             return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
@@ -401,7 +418,7 @@ def create_sohnbot_mcp_server(broker, config):
         )
 
         if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
+            error_msg = (result.error or {}).get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__rollback", error=error_msg)
             return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 
@@ -444,7 +461,7 @@ def create_sohnbot_mcp_server(broker, config):
         )
 
         if not result.allowed:
-            error_msg = result.error.get("message", "Operation denied")
+            error_msg = (result.error or {}).get("message", "Operation denied")
             logger.warning("mcp_tool_denied", tool="git__checkout", error=error_msg)
             return _as_mcp_text(f"❌ Operation denied: {error_msg}")
 

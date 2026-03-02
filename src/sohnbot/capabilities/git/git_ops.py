@@ -3,11 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
+import sys
 from pathlib import Path
 import re
 from typing import Any
 
 from .snapshot_manager import GitCapabilityError
+
+
+async def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill the subprocess and its entire process group."""
+    if proc.returncode is not None:
+        return
+    if sys.platform != "win32":
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    if proc.returncode is None:
+        proc.kill()
+    await proc.wait()
 
 
 async def _run_git_command(
@@ -21,6 +39,7 @@ async def _run_git_command(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
     except FileNotFoundError as exc:
         raise GitCapabilityError(
@@ -39,8 +58,7 @@ async def _run_git_command(
             timeout=timeout_seconds,
         )
     except asyncio.TimeoutError as exc:
-        process.kill()
-        await process.wait()
+        await _kill_process_tree(process)
         raise GitCapabilityError(
             code=timeout_code,
             message=f"Git command timed out after {timeout_seconds}s",
@@ -49,8 +67,7 @@ async def _run_git_command(
         ) from exc
     except asyncio.CancelledError:
         if process.returncode is None:
-            process.kill()
-            await process.wait()
+            await _kill_process_tree(process)
         raise
 
     stdout = stdout_b.decode("utf-8", errors="replace")

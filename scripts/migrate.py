@@ -108,12 +108,12 @@ def apply_migrations(db_path: Path, migrations_dir: Path) -> None:
                     f"Got checksum: {current_checksum}\n"
                     f"This indicates the migration file was modified after being applied."
                 )
-            print(f"✓ Skipping {name} (already applied)")
+            print(f"[SKIP] {name} (already applied)")
             skipped_count += 1
             continue
 
         # Apply new migration
-        print(f"→ Applying migration: {name}")
+        print(f"[RUN] Applying migration: {name}")
         checksum = calculate_checksum(path)
 
         try:
@@ -123,11 +123,11 @@ def apply_migrations(db_path: Path, migrations_dir: Path) -> None:
                     "INSERT INTO schema_migrations (migration_name, checksum, applied_at) VALUES (?, ?, ?)",
                     (name, checksum, int(datetime.now().timestamp()))
                 )
-            print(f"✓ Applied {name}")
+            print(f"[OK] Applied {name}")
             applied_count += 1
         except Exception as e:
             conn.close()
-            print(f"✗ Failed to apply {name}: {e}", file=sys.stderr)
+            print(f"[ERROR] Failed to apply {name}: {e}", file=sys.stderr)
             raise
 
     conn.close()
@@ -164,10 +164,10 @@ def main() -> int:
 
     try:
         apply_migrations(db_path, migrations_dir)
-        print("\n✓ Migrations completed successfully")
+        print("\n[SUCCESS] Migrations completed successfully")
         return 0
     except Exception as e:
-        print(f"\n✗ Migration failed: {e}", file=sys.stderr)
+        print(f"\n[FAILED] Migration failed: {e}", file=sys.stderr)
         return 1
 
 

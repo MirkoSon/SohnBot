@@ -105,7 +105,7 @@ async def test_all_operations_logged(setup_database, allowed_root):
     broker = BrokerRouter(ScopeValidator([str(allowed_root)]))
     await broker.route_operation("fs", "read", {"path": str(allowed_root / "a.txt")}, "chat1")
     await broker.route_operation("fs", "list", {"path": str(allowed_root)}, "chat1")
-    await broker.route_operation("git", "status", {}, "chat1")
+    await broker.route_operation("git", "status", {"repo_path": str(allowed_root)}, "chat1")
     db = await setup_database.get_connection()
     cursor = await db.execute("SELECT COUNT(*) FROM execution_log")
     count = (await cursor.fetchone())[0]

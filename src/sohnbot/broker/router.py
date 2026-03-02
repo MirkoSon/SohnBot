@@ -17,6 +17,7 @@ from ..capabilities.git import (
     git_diff,
     git_status,
 )
+from ..capabilities.result_types import CapabilityResult
 from ..capabilities.scheduler import (
     create_job,
     delete_job,
@@ -52,7 +53,7 @@ class BrokerResult:
     tier: Optional[int] = None
     snapshot_ref: Optional[str] = None
     error: Optional[dict] = None
-    result: Optional[dict] = None
+    result: Optional[CapabilityResult | dict] = None  # dict for backward compatibility during migration
 
 
 class BrokerRouter:
