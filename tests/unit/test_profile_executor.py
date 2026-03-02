@@ -2,6 +2,7 @@
 
 import asyncio
 import signal
+import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -61,7 +62,9 @@ class TestExecuteLintProfile:
         from src.sohnbot.capabilities.command_profiles.profile_executor import execute_lint_profile
 
         mock_proc = AsyncMock()
-        mock_proc.kill = MagicMock()
+        mock_proc.pid = 1234
+        mock_proc.returncode = None
+        mock_proc.wait = AsyncMock(return_value=0)
 
         async def slow_communicate():
             await asyncio.sleep(100)
@@ -78,8 +81,8 @@ class TestExecuteLintProfile:
                     timeout_seconds=0,
                 )
 
-        mock_proc.kill.assert_called_once()
-        mock_proc.wait.assert_called_once()
+        # On Windows, proc.kill() is called; on POSIX, os.killpg() is used instead
+        mock_proc.wait.assert_called()
 
     @pytest.mark.asyncio
     async def test_lint_no_files_runs_against_cwd(self):
@@ -220,7 +223,9 @@ class TestExecuteBuildProfile:
         from src.sohnbot.capabilities.command_profiles.profile_executor import execute_build_profile
 
         mock_proc = AsyncMock()
-        mock_proc.kill = MagicMock()
+        mock_proc.pid = 1234
+        mock_proc.returncode = None
+        mock_proc.wait = AsyncMock(return_value=0)
 
         async def slow_communicate():
             await asyncio.sleep(100)
@@ -237,8 +242,8 @@ class TestExecuteBuildProfile:
                     timeout_seconds=0,
                 )
 
-        mock_proc.kill.assert_called_once()
-        mock_proc.wait.assert_called_once()
+        # On Windows, proc.kill() is called; on POSIX, os.killpg() is used instead
+        mock_proc.wait.assert_called()
 
     @pytest.mark.asyncio
     async def test_build_no_target_runs_command_only(self):
@@ -453,7 +458,9 @@ class TestExecuteTestProfile:
         from src.sohnbot.capabilities.command_profiles.profile_executor import execute_test_profile
 
         mock_proc = AsyncMock()
-        mock_proc.kill = MagicMock()
+        mock_proc.pid = 1234
+        mock_proc.returncode = None
+        mock_proc.wait = AsyncMock(return_value=0)
 
         async def slow_communicate():
             await asyncio.sleep(100)
@@ -470,8 +477,8 @@ class TestExecuteTestProfile:
                     timeout_seconds=0,
                 )
 
-        mock_proc.kill.assert_called_once()
-        mock_proc.wait.assert_called_once()
+        # On Windows, proc.kill() is called; on POSIX, os.killpg() is used instead
+        mock_proc.wait.assert_called()
 
     @pytest.mark.asyncio
     async def test_test_no_pattern_runs_full_suite(self):
@@ -632,7 +639,9 @@ class TestExecuteRipgrepProfile:
         from src.sohnbot.capabilities.command_profiles.profile_executor import execute_ripgrep_profile
 
         mock_proc = AsyncMock()
-        mock_proc.kill = MagicMock()
+        mock_proc.pid = 1234
+        mock_proc.returncode = None
+        mock_proc.wait = AsyncMock(return_value=0)
 
         async def slow_communicate():
             await asyncio.sleep(100)
@@ -648,8 +657,8 @@ class TestExecuteRipgrepProfile:
                     timeout_seconds=0,
                 )
 
-        mock_proc.kill.assert_called_once()
-        mock_proc.wait.assert_called_once()
+        # On Windows, proc.kill() is called; on POSIX, os.killpg() is used instead
+        mock_proc.wait.assert_called()
 
     @pytest.mark.asyncio
     async def test_ripgrep_malformed_json_lines_are_ignored(self):
@@ -704,6 +713,7 @@ async def test_profile_subprocesses_use_start_new_session(runner, kwargs):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only test")
 async def test_timeout_kills_process_group_on_posix():
     from src.sohnbot.capabilities.command_profiles.profile_executor import execute_lint_profile
 

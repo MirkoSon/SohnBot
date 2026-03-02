@@ -176,7 +176,7 @@ class SnapshotManager:
 
         return branch_name
 
-    def list_snapshots(self, repo_path: str) -> list[dict[str, Any]]:
+    async def list_snapshots(self, repo_path: str) -> list[dict[str, Any]]:
         """
         List all snapshot branches in the repository.
 
@@ -190,17 +190,18 @@ class SnapshotManager:
         Raises:
             GitCapabilityError: If git command fails
         """
-        import subprocess
-
-        cmd = ["git", "-C", repo_path, "branch", "--list", "snapshot/*"]
-
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                check=False,
-                timeout=10,
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                repo_path,
+                "branch",
+                "--list",
+                "snapshot/*",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
         except FileNotFoundError as exc:
             raise GitCapabilityError(
                 code="git_not_found",
@@ -208,7 +209,9 @@ class SnapshotManager:
                 details={"repo_path": repo_path},
                 retryable=False,
             ) from exc
-        except subprocess.TimeoutExpired as exc:
+        except asyncio.TimeoutError as exc:
+            process.kill()
+            await process.wait()
             raise GitCapabilityError(
                 code="list_snapshots_failed",
                 message="Git list snapshots command timed out",
@@ -216,19 +219,19 @@ class SnapshotManager:
                 retryable=True,
             ) from exc
 
-        if result.returncode != 0:
+        if process.returncode != 0:
             raise GitCapabilityError(
                 code="list_snapshots_failed",
                 message="Failed to list snapshot branches",
                 details={
                     "repo_path": repo_path,
-                    "stderr": result.stderr.decode("utf-8", errors="replace").strip(),
+                    "stderr": stderr.decode("utf-8", errors="replace").strip(),
                 },
                 retryable=False,
             )
 
         # Parse output: lines like "  snapshot/edit-YYYY-MM-DD-HHMM" or "  snapshot/edit-YYYY-MM-DD-HHMM-suffix"
-        output = result.stdout.decode("utf-8", errors="replace").strip()
+        output = stdout.decode("utf-8", errors="replace").strip()
         if not output:
             return []
 

@@ -5,6 +5,7 @@ Routes Telegram messages to Claude Agent SDK runtime and aggregates responses.
 """
 
 import structlog
+from structlog.contextvars import bind_contextvars
 
 logger = structlog.get_logger(__name__)
 
@@ -21,7 +22,13 @@ class MessageRouter:
         """
         self.agent_session = agent_session
 
-    async def route_to_runtime(self, chat_id: str, message: str, send_message=None) -> str:
+    async def route_to_runtime(
+        self,
+        chat_id: str,
+        message: str,
+        send_message=None,
+        correlation_id: str | None = None,
+    ) -> str:
         """
         Route message to agent runtime and return aggregated response.
 
@@ -29,6 +36,7 @@ class MessageRouter:
             chat_id: Telegram chat ID for context
             message: User message text
             send_message: Optional Telegram sender callback
+            correlation_id: Optional request correlation identifier
 
         Returns:
             Aggregated response text from Claude
@@ -41,6 +49,9 @@ class MessageRouter:
             chat_id=chat_id,
             message_length=len(message)
         )
+
+        if correlation_id:
+            bind_contextvars(correlation_id=correlation_id)
 
         response_parts = []
 

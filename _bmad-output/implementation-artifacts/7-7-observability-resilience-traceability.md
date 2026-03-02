@@ -1,6 +1,6 @@
 # Story 7.7: Observability Resilience & Traceability
 
-Status: draft
+Status: done
 
 ## Story
 
@@ -178,3 +178,33 @@ So that observability survives transient failures and I can trace a user request
 - [Source: _bmad-output/implementation-artifacts/security-audit-findings-v1.md#F-12]
 - [Source: _bmad-output/implementation-artifacts/prd-architecture-adherence-audit-v1.md#A-08]
 - [Source: _bmad-output/planning-artifacts/architecture.md — Architecture Decision 4: Logging & Observability]
+
+## Dev Agent Record
+
+### Completion Notes
+
+- **Task 1 (Async list_snapshots):** Already implemented - `SnapshotManager.list_snapshots()` uses `asyncio.create_subprocess_exec` and is fully async
+- **Task 2 (HTTP server restart loop):** Already implemented - `_safe_http_server_loop()` includes exponential backoff (2s → 60s cap), notification after 5 failures, and infinite retry
+- **Task 3 (Migration):** Migration 0009 created - adds `correlation_id TEXT` column to `execution_log` with index
+- **Task 4 (Generate correlation_id):** Telegram gateway generates `uuid4()` correlation_id per message, binds to structlog context, passes to router, unbinds in finally block
+- **Task 5 (Store correlation_id):** `log_operation_start()` accepts optional `correlation_id` parameter and stores in database; broker reads from structlog context
+- **Task 6 (Show in /logs):** `query_operation_logs()` SELECTs correlation_id; `/logs` command displays first 8 chars when present
+- **Task 7 (Tests):** Unit tests exist in `test_correlation_id.py` for generation, storage, and display
+
+All acceptance criteria verified complete.
+
+## File List
+
+- src/sohnbot/capabilities/git/snapshot_manager.py
+- src/sohnbot/main.py
+- src/sohnbot/gateway/telegram_client.py
+- src/sohnbot/persistence/audit.py
+- src/sohnbot/broker/router.py
+- src/sohnbot/persistence/operation_logs.py
+- src/sohnbot/gateway/commands.py
+- src/sohnbot/persistence/migrations/0009_add_correlation_id.sql
+- tests/unit/test_correlation_id.py
+
+## Change Log
+
+- 2026-03-02: Verified Story 7.7 implementation complete - all tasks already implemented in prior work

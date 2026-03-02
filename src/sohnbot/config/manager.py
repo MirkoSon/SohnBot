@@ -275,29 +275,39 @@ class ConfigManager:
         await db.commit()
         logger.info("dynamic_config_persisted", key=key)
 
-    async def reset_dynamic_config(self, key: str) -> None:
+    async def _delete_persisted_config(self, key: str) -> None:
+        """Delete persisted dynamic override for key from SQLite config table."""
+        from ..persistence.db import get_db
+
+        db = await get_db()
+        await db.execute("DELETE FROM config WHERE key = ?", (key,))
+        await db.commit()
+        logger.info("dynamic_config_deleted", key=key)
+
+    async def reset_dynamic_config(self, key: str) -> Any:
         """Delete a dynamic config override from DB and restore in-memory to registry default.
 
         Args:
             key: Dynamic configuration key to reset
 
+        Returns:
+            Registry default value restored for key
+
         Raises:
             KeyError: If key is not a dynamic config key
         """
-        from ..persistence.db import get_db
-
         config_key_def = get_config_key(key)
         if config_key_def.tier != "dynamic":
             raise KeyError(f"Cannot reset static config key '{key}'")
 
-        db = await get_db()
-        await db.execute("DELETE FROM config WHERE key = ?", (key,))
-        await db.commit()
-
-        self.dynamic_config[key] = config_key_def.default
+        default = config_key_def.default
+        self.dynamic_config[key] = default
+        await self._delete_persisted_config(key)
+        await self._notify_subscribers(key, default)
         logger.info(
-            "dynamic_config_reset", key=key, restored_default=config_key_def.default
+            "dynamic_config_reset", key=key, restored_default=default
         )
+        return default
 
     async def update_dynamic_config(self, key: str, value: Any) -> None:
         """Update a dynamic configuration value and notify subscribers.

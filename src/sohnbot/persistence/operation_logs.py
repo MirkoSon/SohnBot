@@ -70,7 +70,8 @@ async def query_operation_logs(
             file_paths,
             snapshot_ref,
             duration_ms,
-            error_details
+            error_details,
+            correlation_id
         FROM execution_log
         WHERE timestamp >= ?
     """
@@ -133,6 +134,7 @@ async def query_operation_logs(
                 "snapshot_ref": row[8],
                 "duration_ms": row[9],
                 "error_details": error_details,
+                "correlation_id": row[11],
             }
         )
 

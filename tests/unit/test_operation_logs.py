@@ -39,6 +39,7 @@ async def test_query_operation_logs_last_24_hours(logs_db):
     assert len(rows) == 1
     assert rows[0]["operation_id"] == "op-1"
     assert rows[0]["timestamp_iso"]
+    assert rows[0]["correlation_id"] is None
 
 
 @pytest.mark.asyncio
@@ -78,8 +79,8 @@ async def test_query_operation_logs_decodes_json_fields(logs_db):
         await db.execute(
             """
             INSERT INTO execution_log (
-                operation_id, timestamp, capability, action, chat_id, tier, status, file_paths, error_details
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                operation_id, timestamp, capability, action, chat_id, tier, status, file_paths, error_details, correlation_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "op-err",
@@ -91,6 +92,7 @@ async def test_query_operation_logs_decodes_json_fields(logs_db):
                 "failed",
                 '["a.txt","b.txt"]',
                 '{"message":"boom"}',
+                "corr-12345",
             ),
         )
         await db.commit()
@@ -98,6 +100,7 @@ async def test_query_operation_logs_decodes_json_fields(logs_db):
     rows = await query_operation_logs(str(logs_db), hours=24)
     assert rows[0]["file_paths"] == ["a.txt", "b.txt"]
     assert rows[0]["error_details"]["message"] == "boom"
+    assert rows[0]["correlation_id"] == "corr-12345"
 
 
 @pytest.mark.asyncio

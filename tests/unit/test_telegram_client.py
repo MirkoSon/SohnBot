@@ -5,7 +5,7 @@ Tests authentication, message handling, and response formatting.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from src.sohnbot.gateway.telegram_client import TelegramClient
 from src.sohnbot.gateway.formatters import format_for_telegram
@@ -52,6 +52,7 @@ class TestTelegramClient:
             chat_id="123456789",
             message="Test message",
             send_message=telegram_client.send_message,
+            correlation_id=ANY,
         )
 
         # Should send response
@@ -109,6 +110,7 @@ class TestTelegramClient:
             chat_id="123456789",
             message="Test message",
             send_message=telegram_client.send_message,
+            correlation_id=ANY,
         )
 
     @pytest.mark.asyncio
@@ -257,6 +259,10 @@ class TestTelegramClient:
         app.initialize.assert_called_once()
         app.start.assert_called_once()
         app.updater.start_polling.assert_called_once()
+        assert any(
+            getattr(call.args[0], "commands", frozenset()) == frozenset({"config"})
+            for call in app.add_handler.call_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_stop_stops_notification_worker(self, message_router):
@@ -499,6 +505,50 @@ class TestTelegramClient:
             await client.cmd_heartbeat(update, None)
 
         heartbeat_handler.assert_not_awaited()
+        update.message.reply_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cmd_config_authorized(self, message_router):
+        """Authorized /config command should reply with config text."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 123456789
+        update.message.text = "/config show"
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_config_command",
+            new=AsyncMock(return_value="Configuration"),
+        ) as config_handler:
+            await client.cmd_config(update, None)
+
+        config_handler.assert_awaited_once_with("123456789", "/config show")
+        update.message.reply_text.assert_awaited_once_with("Configuration")
+
+    @pytest.mark.asyncio
+    async def test_cmd_config_unauthorized(self, message_router):
+        """Unauthorized /config command should be ignored."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 111111111
+        update.message.text = "/config show"
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_config_command",
+            new=AsyncMock(return_value="ignored"),
+        ) as config_handler:
+            await client.cmd_config(update, None)
+
+        config_handler.assert_not_awaited()
         update.message.reply_text.assert_not_called()
 
     @pytest.mark.asyncio

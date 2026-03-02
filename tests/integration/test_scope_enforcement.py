@@ -6,6 +6,7 @@ routing file operations to capabilities.
 """
 
 from unittest.mock import patch
+import os
 
 import pytest
 from pathlib import Path
@@ -80,17 +81,20 @@ class TestBrokerScopeEnforcement:
     @pytest.mark.asyncio
     async def test_broker_blocks_absolute_path_outside_scope(self, broker):
         """Broker blocks absolute paths outside configured scope."""
+        test_path = "/etc/passwd"
         result = await broker.route_operation(
             capability="fs",
             action="read",
-            params={"path": "/etc/passwd"},
+            params={"path": test_path},
             chat_id="test_user"
         )
 
         assert result.allowed is False
         assert result.error["code"] == "scope_violation"
-        assert result.error["details"]["path"] == "/etc/passwd"
-        assert result.error["details"]["normalized_path"] == "/etc/passwd"
+        assert result.error["details"]["path"] == test_path
+        # On Windows, /etc/passwd gets normalized to E:\etc\passwd; on Unix, stays /etc/passwd
+        expected_normalized = os.path.realpath(os.path.expanduser(test_path))
+        assert result.error["details"]["normalized_path"] == expected_normalized
         assert isinstance(result.error["details"]["allowed_roots"], list)
         assert len(result.error["details"]["allowed_roots"]) >= 1
 
@@ -126,11 +130,12 @@ class TestBrokerScopeEnforcement:
     @pytest.mark.asyncio
     async def test_broker_logs_scope_violation(self, broker):
         """Scope violations logged for security auditing."""
+        test_path = "/etc/passwd"
         with patch("src.sohnbot.broker.router.logger.warning") as mock_warning:
             await broker.route_operation(
                 capability="fs",
                 action="read",
-                params={"path": "/etc/passwd"},
+                params={"path": test_path},
                 chat_id="malicious_user",
             )
 
@@ -138,8 +143,10 @@ class TestBrokerScopeEnforcement:
             event_name, event_kwargs = mock_warning.call_args.args[0], mock_warning.call_args.kwargs
             assert event_name == "scope_violation_blocked"
             assert event_kwargs["chat_id"] == "malicious_user"
-            assert event_kwargs["attempted_path"] == "/etc/passwd"
-            assert event_kwargs["normalized_path"] == "/etc/passwd"
+            assert event_kwargs["attempted_path"] == test_path
+            # On Windows, /etc/passwd gets normalized to E:\etc\passwd; on Unix, stays /etc/passwd
+            expected_normalized = os.path.realpath(os.path.expanduser(test_path))
+            assert event_kwargs["normalized_path"] == expected_normalized
 
     @pytest.mark.asyncio
     async def test_broker_blocks_invalid_path_type_without_crash(self, broker):

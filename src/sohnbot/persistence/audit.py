@@ -17,6 +17,7 @@ async def log_operation_start(
     chat_id: str,
     tier: int,
     file_paths: Optional[str | list[str]] = None,
+    correlation_id: Optional[str] = None,
 ) -> None:
     """
     Log operation start to execution_log table.
@@ -28,6 +29,7 @@ async def log_operation_start(
         chat_id: Telegram chat ID (user identifier)
         tier: Operation risk tier (0/1/2/3)
         file_paths: File path(s) affected by operation
+        correlation_id: Request correlation ID shared across operation chain
     """
     # Normalize file_paths to JSON array
     if isinstance(file_paths, str):
@@ -47,8 +49,8 @@ async def log_operation_start(
         await db.execute(
             """
             INSERT INTO execution_log (
-                operation_id, timestamp, capability, action, chat_id, tier, status, file_paths
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                operation_id, timestamp, capability, action, chat_id, tier, status, file_paths, correlation_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 operation_id,
@@ -59,6 +61,7 @@ async def log_operation_start(
                 tier,
                 "in_progress",
                 file_paths_json,
+                correlation_id,
             ),
         )
         await db.commit()

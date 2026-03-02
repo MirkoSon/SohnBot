@@ -210,7 +210,7 @@ async def test_execution_log_table_structure(tmp_path):
     expected = {
         "operation_id", "timestamp", "capability", "action", "chat_id",
         "tier", "status", "file_paths", "snapshot_ref", "duration_ms",
-        "error_details", "details"
+        "error_details", "details", "correlation_id"
     }
     assert column_names == expected
 

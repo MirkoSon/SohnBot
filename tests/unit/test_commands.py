@@ -98,6 +98,7 @@ async def test_logs_command_formats_entries(setup_database):
         chat_id="chat-1",
         tier=0,
         file_paths=["README.md"],
+        correlation_id="12345678-abcd-ef00-9999-aaaaaaaaaaaa",
     )
     await log_operation_end(
         operation_id=operation_id,
@@ -108,6 +109,7 @@ async def test_logs_command_formats_entries(setup_database):
     response = await handle_logs_command("123", "/logs 24", str(setup_database.db_path))
     assert "Operation Logs (last 24h)" in response
     assert "fs__read" in response
+    assert "Corr: 12345678" in response
 
 
 def _sample_snapshot() -> StatusSnapshot:

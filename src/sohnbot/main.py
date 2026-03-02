@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from uuid import uuid4
 
 import structlog
 
@@ -12,6 +13,7 @@ from .config.manager import get_config_manager
 from .capabilities.scheduler.executor import scheduler_executor_loop
 from .observability.http_server import http_server_loop
 from .observability.snapshot_collector import snapshot_collector_loop
+from .persistence.notification import enqueue_notification
 
 logger = structlog.get_logger(__name__)
 
@@ -142,16 +144,46 @@ async def run_main() -> None:
 
 
 async def _safe_http_server_loop(host: str, port: int) -> None:
-    """Run HTTP server loop and surface errors with structured logging."""
-    try:
-        await http_server_loop(host=host, port=port)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "http_server_task_failed",
-            host=host,
-            port=port,
-            error=str(exc),
-            exc_info=True,
-        )
+    """Run HTTP server loop with resilient restart behavior."""
+    consecutive_failures = 0
+    backoff = 2
+    max_backoff = 60
+
+    while True:
+        try:
+            await http_server_loop(host=host, port=port)
+            consecutive_failures = 0
+            backoff = 2
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            consecutive_failures += 1
+            logger.error(
+                "http_server_crash",
+                host=host,
+                port=port,
+                error=str(exc),
+                consecutive_failures=consecutive_failures,
+                restart_delay_seconds=backoff,
+                exc_info=True,
+            )
+
+            if consecutive_failures >= 5:
+                try:
+                    await enqueue_notification(
+                        operation_id=f"http-server-restart-{uuid4()}",
+                        chat_id="system",
+                        message_text=(
+                            "HTTP observability server crashed "
+                            f"{consecutive_failures} times. Last error: {exc}"
+                        ),
+                    )
+                except Exception as notify_exc:  # noqa: BLE001
+                    logger.warning(
+                        "http_server_crash_notification_failed",
+                        error=str(notify_exc),
+                        consecutive_failures=consecutive_failures,
+                    )
+
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)

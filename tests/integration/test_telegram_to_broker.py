@@ -62,12 +62,16 @@ class TestTelegramToBrokerFlow:
         """Full flow: Telegram → Runtime → Response."""
         await telegram_client.handle_message(mock_update, None)
 
-        # Should send response to user
-        mock_update.message.reply_text.assert_called_once()
+        # Should send acknowledgment first, then response (Story 7.5)
+        assert mock_update.message.reply_text.call_count == 2
 
-        # Response should contain expected text
-        call_args = mock_update.message.reply_text.call_args
-        response_text = call_args[0][0]
+        # First call should be acknowledgment
+        first_call_args = mock_update.message.reply_text.call_args_list[0]
+        assert first_call_args[0][0] == "Processing..."
+
+        # Second call should be actual response
+        second_call_args = mock_update.message.reply_text.call_args_list[1]
+        response_text = second_call_args[0][0]
         assert "test response" in response_text.lower()
 
     @pytest.mark.asyncio

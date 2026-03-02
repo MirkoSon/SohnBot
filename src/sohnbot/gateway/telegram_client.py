@@ -4,12 +4,16 @@ Telegram Bot Client.
 Handles Telegram Bot API integration with chat ID authentication.
 """
 
+from uuid import uuid4
+
 import structlog
+from structlog.contextvars import bind_contextvars, unbind_contextvars
 from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from .commands import (
+    handle_config_command,
     handle_heartbeat_command,
     handle_health_command,
     handle_logs_command,
@@ -82,6 +86,7 @@ class TelegramClient:
         self.application.add_handler(CommandHandler("logs", self.cmd_logs))
         self.application.add_handler(CommandHandler("schedule", self.cmd_schedule))
         self.application.add_handler(CommandHandler("heartbeat", self.cmd_heartbeat))
+        self.application.add_handler(CommandHandler("config", self.cmd_config))
         self.application.add_handler(CommandHandler("dryrun", self.cmd_dryrun))
 
         # Start polling
@@ -138,9 +143,11 @@ class TelegramClient:
             message_length=len(message_text) if message_text else 0
         )
 
+        correlation_id = str(uuid4())
         ack_msg = None
         ack_finalized = False
         try:
+            bind_contextvars(correlation_id=correlation_id)
             ack_msg = await update.message.reply_text("Processing...")
 
             # Route to Claude Agent SDK runtime
@@ -148,6 +155,7 @@ class TelegramClient:
                 chat_id=str(chat_id),
                 message=message_text,
                 send_message=self.send_message,
+                correlation_id=correlation_id,
             )
 
             if not response.strip():
@@ -195,6 +203,7 @@ class TelegramClient:
                     pass
             await update.message.reply_text("❌ An error occurred processing your request.")
         finally:
+            unbind_contextvars("correlation_id")
             if ack_msg is not None and not ack_finalized:
                 try:
                     await ack_msg.delete()
@@ -340,6 +349,20 @@ class TelegramClient:
             return
 
         response = await handle_heartbeat_command(str(chat_id), update.message.text or "")
+        await update.message.reply_text(response)
+
+    async def cmd_config(self, update: Update, context):
+        """Handle /config show|set|reset command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_config_command", chat_id=chat_id)
+            return
+
+        response = await handle_config_command(str(chat_id), update.message.text or "")
         await update.message.reply_text(response)
 
     async def cmd_dryrun(self, update: Update, context):

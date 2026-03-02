@@ -12,6 +12,8 @@ from croniter import croniter
 
 from ..capabilities.scheduler.timezone_handler import get_dst_transition_count
 from ..capabilities.scheduler import get_job_by_name
+from ..config.manager import get_config_manager
+from ..config.registry import REGISTRY, get_config_key, get_dynamic_keys, get_static_keys
 from ..capabilities.observe import (
     get_health_snapshot,
     get_resource_snapshot_data,
@@ -49,6 +51,121 @@ async def handle_notify_command(chat_id: str, command_text: str) -> str:
         enabled = await get_notifications_enabled(chat_id)
         return "Notifications are ON." if enabled else "Notifications are OFF."
     return "Usage: /notify on|off|status"
+
+
+def _format_config_value(value: Any) -> str:
+    """Render config values for compact Telegram display."""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _coerce_config_value(key: str, raw_value: str) -> Any:
+    """Coerce raw `/config set` value to the registry-declared type for key."""
+    config_key = get_config_key(key)
+    expected = config_key.value_type
+    value = raw_value.strip()
+
+    if expected is bool:
+        lowered = value.lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+        raise ValueError(
+            f"Type mismatch for '{key}': expected bool "
+            "(true/false/yes/no/1/0/on/off)"
+        )
+
+    if expected is int:
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise ValueError(f"Type mismatch for '{key}': expected int") from exc
+
+    if expected is float:
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise ValueError(f"Type mismatch for '{key}': expected float") from exc
+
+    if expected is str:
+        return value
+
+    raise ValueError(
+        f"Unsupported config value type for '{key}': {expected.__name__}"
+    )
+
+
+async def handle_config_command(chat_id: str, command_text: str) -> str:
+    """Handle /config show|set|reset command family."""
+    _ = chat_id  # Reserved for future auditing/formatting customization.
+    usage = "Usage: /config show | set <key>=<value> | reset <key>"
+    parts = command_text.strip().split(maxsplit=2)
+    if len(parts) < 2:
+        return usage
+
+    subcommand = parts[1].lower()
+
+    try:
+        config_manager = get_config_manager()
+    except RuntimeError as exc:
+        return f"Configuration unavailable: {exc}"
+
+    if subcommand == "show":
+        lines = ["Configuration", "", "Dynamic Keys:"]
+        for key in sorted(get_dynamic_keys()):
+            key_def = REGISTRY[key]
+            current = _format_config_value(config_manager.get(key))
+            default = _format_config_value(key_def.default)
+            lines.append(f"`{key} = {current} (default: {default}) [dynamic]`")
+
+        lines.extend(["", "Static Keys:"])
+        for key in sorted(get_static_keys()):
+            current = _format_config_value(config_manager.get(key))
+            lines.append(f"`{key} = {current} [static, restart required]`")
+
+        response = "\n".join(lines)
+        if len(response) > 4000:
+            return f"{response[:3997]}..."
+        return response
+
+    if subcommand == "set":
+        if len(parts) < 3 or "=" not in parts[2]:
+            return usage
+
+        key, raw_value = parts[2].split("=", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if not key:
+            return usage
+
+        try:
+            key_def = get_config_key(key)
+            if key_def.tier != "dynamic":
+                return f"Key {key} is static — update config/default.toml and restart"
+
+            value = _coerce_config_value(key, raw_value)
+            await config_manager.update_dynamic_config(key, value)
+            return f"Updated {key} = {_format_config_value(value)}"
+        except (KeyError, ValueError) as exc:
+            return str(exc)
+
+    if subcommand == "reset":
+        if len(parts) < 3:
+            return usage
+
+        key = parts[2].strip()
+        if not key:
+            return usage
+
+        try:
+            restored_default = await config_manager.reset_dynamic_config(key)
+            return f"Reset {key} to default: {_format_config_value(restored_default)}"
+        except (KeyError, ValueError) as exc:
+            return str(exc)
+
+    return usage
 
 
 def _format_elapsed(reference_ts: int) -> str:
@@ -236,6 +353,11 @@ async def handle_logs_command(chat_id: str, command_text: str, db_path: str) -> 
         prefix = status_emoji.get(status, "❔")
 
         line = f"{prefix} {timestamp_iso} | {op_type} | {status} | {duration_text}"
+
+        correlation_id = entry.get("correlation_id")
+        if correlation_id:
+            corr_preview = str(correlation_id)[:8]
+            line = f"{line}\n  Corr: {corr_preview}"
 
         file_paths = entry.get("file_paths") or []
         if file_paths:

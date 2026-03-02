@@ -3,6 +3,7 @@
 import pytest
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 import tempfile
 import os
 
@@ -68,7 +69,7 @@ class TestStaticConfigLoading:
 
         try:
             manager = ConfigManager(config_file=temp_file)
-            with pytest.raises(ValueError, match="Custom validation failed"):
+            with pytest.raises(ValueError, match="Validator error: HTTP server must bind to localhost only"):
                 manager.load_static_config()
         finally:
             temp_file.unlink()
@@ -173,8 +174,10 @@ class TestHotReload:
         manager.load_static_config()
         manager.load_dynamic_config_defaults()
 
-        # Update dynamic value
-        await manager.update_dynamic_config("logging.level", "DEBUG")
+        # Mock database persistence (Story 7.1)
+        with patch.object(manager, '_persist_to_database', new=AsyncMock()):
+            # Update dynamic value
+            await manager.update_dynamic_config("logging.level", "DEBUG")
 
         # Verify updated
         assert manager.dynamic_config["logging.level"] == "DEBUG"
@@ -214,8 +217,10 @@ class TestHotReload:
 
         manager.subscribe(subscriber)
 
-        # Update config
-        await manager.update_dynamic_config("logging.level", "WARNING")
+        # Mock database persistence (Story 7.1)
+        with patch.object(manager, '_persist_to_database', new=AsyncMock()):
+            # Update config
+            await manager.update_dynamic_config("logging.level", "WARNING")
 
         # Verify subscriber notified
         assert len(notifications) == 1
@@ -235,8 +240,10 @@ class TestHotReload:
         manager.subscribe(lambda k, v: notifications1.append((k, v)))
         manager.subscribe(lambda k, v: notifications2.append((k, v)))
 
-        # Update config
-        await manager.update_dynamic_config("logging.level", "ERROR")
+        # Mock database persistence (Story 7.1)
+        with patch.object(manager, '_persist_to_database', new=AsyncMock()):
+            # Update config
+            await manager.update_dynamic_config("logging.level", "ERROR")
 
         # Verify all subscribers notified
         assert len(notifications1) == 1

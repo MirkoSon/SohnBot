@@ -215,19 +215,18 @@ class TestGitCapabilityErrorShape:
 # ---------------------------------------------------------------------------
 
 class TestListSnapshots:
-    def test_lists_snapshots_with_timestamps(self, manager, fake_repo):
+    @pytest.mark.asyncio
+    async def test_lists_snapshots_with_timestamps(self, manager, fake_repo):
         """Returns sorted list of snapshot branches with parsed timestamps."""
         # Mock git branch --list output
         git_output = b"  snapshot/edit-2026-02-27-1430\n  snapshot/edit-2026-02-26-0900\n"
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=git_output,
-                stderr=b"",
-            )
+        process = AsyncMock()
+        process.returncode = 0
+        process.communicate = AsyncMock(return_value=(git_output, b""))
 
-            result = manager.list_snapshots(str(fake_repo))
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            result = await manager.list_snapshots(str(fake_repo))
 
         assert len(result) == 2
         # Should be sorted newest first
@@ -236,30 +235,28 @@ class TestListSnapshots:
         assert result[1]["ref"] == "snapshot/edit-2026-02-26-0900"
         assert "Feb 26, 2026 09:00 UTC" in result[1]["timestamp"]
 
-    def test_returns_empty_list_when_no_snapshots(self, manager, fake_repo):
+    @pytest.mark.asyncio
+    async def test_returns_empty_list_when_no_snapshots(self, manager, fake_repo):
         """Returns empty list when no snapshot branches exist."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=b"",
-                stderr=b"",
-            )
+        process = AsyncMock()
+        process.returncode = 0
+        process.communicate = AsyncMock(return_value=(b"", b""))
 
-            result = manager.list_snapshots(str(fake_repo))
+        with patch("asyncio.create_subprocess_exec", return_value=process):
+            result = await manager.list_snapshots(str(fake_repo))
 
         assert result == []
 
-    def test_raises_on_git_failure(self, manager, fake_repo):
+    @pytest.mark.asyncio
+    async def test_raises_on_git_failure(self, manager, fake_repo):
         """Raises list_snapshots_failed when git command fails."""
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=1,
-                stdout=b"",
-                stderr=b"fatal: not a git repository",
-            )
+        process = AsyncMock()
+        process.returncode = 1
+        process.communicate = AsyncMock(return_value=(b"", b"fatal: not a git repository"))
 
+        with patch("asyncio.create_subprocess_exec", return_value=process):
             with pytest.raises(GitCapabilityError) as exc_info:
-                manager.list_snapshots(str(fake_repo))
+                await manager.list_snapshots(str(fake_repo))
 
         assert exc_info.value.code == "list_snapshots_failed"
 

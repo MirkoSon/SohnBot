@@ -51,12 +51,11 @@ class TestListSnapshotsBrokerRoute:
     async def test_list_snapshots_through_broker(self, broker, fake_repo, setup_database):
         """Full broker route for list_snapshots operation."""
         # Mock subprocess for git branch --list
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=b"  snapshot/edit-2026-02-27-1430\n",
-                stderr=b"",
-            )
+        process = AsyncMock()
+        process.returncode = 0
+        process.communicate = AsyncMock(return_value=(b"  snapshot/edit-2026-02-27-1430\n", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=process):
 
             result = await broker.route_operation(
                 capability="git",
@@ -66,7 +65,7 @@ class TestListSnapshotsBrokerRoute:
             )
 
         assert result.allowed is True
-        assert result.tier == 1
+        assert result.tier == 0
         assert "snapshots" in result.result
         assert len(result.result["snapshots"]) == 1
         assert result.result["snapshots"][0]["ref"] == "snapshot/edit-2026-02-27-1430"

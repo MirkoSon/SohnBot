@@ -817,6 +817,8 @@ class BrokerRouter:
         # 4. Check limits (e.g., max command profiles per request)
         # TODO: Implement limit checking (Story 1.5+)
 
+        correlation_id = structlog.contextvars.get_contextvars().get("correlation_id")
+
         # 5. Log operation start
         await log_operation_start(
             operation_id=operation_id,
@@ -825,6 +827,7 @@ class BrokerRouter:
             chat_id=chat_id,
             tier=tier,
             file_paths=params.get("path") or params.get("paths"),
+            correlation_id=correlation_id,
         )
 
         # 6. Execute capability (with snapshot if Tier 1/2)
@@ -1142,7 +1145,7 @@ class BrokerRouter:
                     timeout_seconds=int(params.get("timeout_seconds", timeout)),
                 )
             if action == "list_snapshots":
-                snapshots = self.snapshot_manager.list_snapshots(params["repo_path"])
+                snapshots = await self.snapshot_manager.list_snapshots(params["repo_path"])
                 return {"snapshots": snapshots, "total_count": len(snapshots)}
             if action == "prune_snapshots":
                 if "retention_days" in params and params.get("retention_days") is not None:

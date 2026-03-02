@@ -18,7 +18,10 @@
       "Bash(ls:*)",
       "Bash(poetry run:*)",
       "Bash(git:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(.venv/bin/pytest:*)"
     ]
   }
 }
