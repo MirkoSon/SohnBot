@@ -89,3 +89,22 @@ async def test_recover_pending_rebuilds_in_memory_and_schedules_tasks():
     assert await manager.has_pending("123") is True
     assert "op-1" in manager._retry_tasks
     assert "op-1" in manager._cancel_tasks
+
+
+@pytest.mark.asyncio
+async def test_postpone_task_references_are_removed_after_completion():
+    manager = PostponementManager(retry_delay_seconds=0, cancellation_delay_seconds=0)
+    await manager.add_pending("op-1", "123", "do it", ("list files", "search files"))
+    pending = await manager.get_pending("123")
+    assert pending is not None
+
+    with (
+        patch("src.sohnbot.runtime.postponement_manager.log_operation_end", AsyncMock()),
+        patch("src.sohnbot.runtime.postponement_manager.enqueue_notification", AsyncMock()),
+    ):
+        await manager.postpone_and_schedule(pending)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert "op-1" not in manager._retry_tasks
+    assert "op-1" not in manager._cancel_tasks

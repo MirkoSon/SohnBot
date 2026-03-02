@@ -8,6 +8,7 @@ import pytest
 
 from sohnbot.capabilities.files.file_ops import FileCapabilityError
 from sohnbot.capabilities.files.patch_editor import PatchEditor
+from sohnbot.broker.scope_validator import ScopeValidator
 
 
 VALID_PATCH = """\
@@ -182,3 +183,27 @@ class TestErrorShape:
         assert "message" in error_dict
         assert "details" in error_dict
         assert "retryable" in error_dict
+
+
+def test_apply_patch_revalidates_scope_at_write_boundary(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    target = root / "file.txt"
+    target.write_text("line1\nline2\nline3\n")
+
+    validator = ScopeValidator([str(root)])
+    editor = PatchEditor(scope_validator=validator)
+
+    patch_for_file = VALID_PATCH.replace("original.txt", target.name)
+
+    calls = iter([str(target), "/etc/passwd"])
+
+    def fake_realpath(_path: str) -> str:
+        return next(calls)
+
+    monkeypatch.setattr("sohnbot.capabilities.files.patch_editor.os.path.realpath", fake_realpath)
+
+    with pytest.raises(FileCapabilityError) as exc_info:
+        editor.apply_patch(path=str(target), patch_content=patch_for_file)
+
+    assert exc_info.value.code == "scope_violation"

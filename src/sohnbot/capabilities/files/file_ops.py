@@ -6,7 +6,10 @@ import asyncio
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...broker.scope_validator import ScopeValidator
 
 
 EXCLUDED_DIRS = {".git", ".venv", "node_modules"}
@@ -33,8 +36,32 @@ class FileCapabilityError(Exception):
 class FileOps:
     """Implements Tier-0 filesystem operations."""
 
-    def __init__(self, excluded_dirs: set[str] | None = None):
+    def __init__(
+        self,
+        excluded_dirs: set[str] | None = None,
+        scope_validator: "ScopeValidator | None" = None,
+    ):
         self.excluded_dirs = excluded_dirs or EXCLUDED_DIRS
+        self.scope_validator = scope_validator
+
+    def _revalidate_path(self, path: str | Path) -> Path:
+        """
+        Re-validate real path at I/O boundary to reduce TOCTOU window.
+
+        This is a best-effort userspace mitigation; kernel-level controls would
+        still be needed to eliminate TOCTOU races completely.
+        """
+        resolved = Path(os.path.realpath(str(path)))
+        if self.scope_validator is not None:
+            is_valid, error_msg = self.scope_validator.validate_path(str(resolved))
+            if not is_valid:
+                raise FileCapabilityError(
+                    code="scope_violation",
+                    message=error_msg or "Path outside allowed scope",
+                    details={"path": str(path), "resolved_path": str(resolved)},
+                    retryable=False,
+                )
+        return resolved
 
     def list_files(self, path: str) -> dict[str, Any]:
         """Recursively list files with metadata, excluding traversal dirs."""
@@ -55,17 +82,20 @@ class FileOps:
             )
 
         files: list[dict[str, Any]] = []
-        for current_root, dirs, filenames in os.walk(root):
-            # Prune excluded directories from traversal.
-            dirs[:] = [d for d in dirs if d not in self.excluded_dirs]
+        stack: list[Path] = [root]
+        while stack:
+            current_path = self._revalidate_path(stack.pop())
+            for entry in current_path.iterdir():
+                if entry.is_dir():
+                    if entry.name in self.excluded_dirs:
+                        continue
+                    stack.append(entry)
+                    continue
 
-            current_path = Path(current_root)
-            for name in filenames:
-                file_path = current_path / name
-                stat_result = file_path.stat()
+                stat_result = entry.stat()
                 files.append(
                     {
-                        "path": str(file_path),
+                        "path": str(entry),
                         "size": stat_result.st_size,
                         "modified_at": int(stat_result.st_mtime),
                     }
@@ -115,7 +145,9 @@ class FileOps:
             )
 
         try:
-            content = file_path.read_text(encoding="utf-8")
+            # Re-validate immediately before the text read boundary.
+            safe_path = self._revalidate_path(file_path)
+            content = safe_path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise FileCapabilityError(
                 code="binary_not_supported",

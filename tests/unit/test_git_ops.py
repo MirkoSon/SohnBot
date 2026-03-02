@@ -78,6 +78,23 @@ async def test_git_status_timeout_handling():
 
 
 @pytest.mark.asyncio
+async def test_git_status_cancelled_error_kills_process_and_reraises():
+    proc = _FakeProcess(0, b"", b"")
+    proc.returncode = None
+
+    async def cancelled_communicate():
+        raise asyncio.CancelledError()
+
+    proc.communicate = cancelled_communicate
+    with patch("src.sohnbot.capabilities.git.git_ops.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        with pytest.raises(asyncio.CancelledError):
+            await git_status("/repo")
+
+    proc.kill.assert_called_once()
+    proc.wait.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_git_diff_working_tree_vs_staged():
     diff_text = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-a\n+b\n".encode()
     proc = _FakeProcess(0, diff_text, b"")

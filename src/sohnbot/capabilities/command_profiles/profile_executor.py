@@ -2,9 +2,49 @@
 
 import asyncio
 import json
+import os
+import signal
 import structlog
+import sys
 
 logger = structlog.get_logger(__name__)
+
+
+async def _kill_process_group(proc: asyncio.subprocess.Process, grace_seconds: float = 0.5) -> None:
+    """Terminate subprocess tree; SIGTERM first, then SIGKILL fallback on POSIX."""
+    if proc.returncode is not None:
+        return
+
+    if sys.platform != "win32":
+        try:
+            pgid = os.getpgid(proc.pid)
+        except (TypeError, ProcessLookupError, PermissionError, OSError):
+            pgid = None
+
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=grace_seconds)
+                return
+            except asyncio.TimeoutError:
+                pass
+            except (ProcessLookupError, PermissionError, OSError):
+                return
+
+            if proc.returncode is None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+
+    if proc.returncode is None:
+        proc.kill()
+
+    await proc.wait()
 
 
 async def execute_lint_profile(
@@ -52,13 +92,13 @@ async def execute_lint_profile(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=repo_path,
+                start_new_session=True,
             )
             stdout_bytes, stderr_bytes = await proc.communicate()
 
     except TimeoutError:
-        if proc is not None:
-            proc.kill()
-            await proc.wait()
+        if proc is not None and proc.returncode is None:
+            await _kill_process_group(proc)
         logger.warning(
             "lint_profile_timeout",
             repo_path=repo_path,
@@ -68,11 +108,7 @@ async def execute_lint_profile(
 
     except asyncio.CancelledError:
         if proc is not None and proc.returncode is None:
-            proc.kill()
-            try:
-                await asyncio.shield(proc.wait())
-            except asyncio.CancelledError:
-                pass
+            await _kill_process_group(proc)
         raise
 
     exit_code = proc.returncode
@@ -142,13 +178,13 @@ async def execute_build_profile(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=repo_path,
+                start_new_session=True,
             )
             stdout_bytes, stderr_bytes = await proc.communicate()
 
     except TimeoutError:
-        if proc is not None:
-            proc.kill()
-            await proc.wait()
+        if proc is not None and proc.returncode is None:
+            await _kill_process_group(proc)
         logger.warning(
             "build_profile_timeout",
             repo_path=repo_path,
@@ -158,11 +194,7 @@ async def execute_build_profile(
 
     except asyncio.CancelledError:
         if proc is not None and proc.returncode is None:
-            proc.kill()
-            try:
-                await asyncio.shield(proc.wait())
-            except asyncio.CancelledError:
-                pass
+            await _kill_process_group(proc)
         raise
 
     exit_code = proc.returncode
@@ -234,13 +266,13 @@ async def execute_test_profile(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=repo_path,
+                start_new_session=True,
             )
             stdout_bytes, stderr_bytes = await proc.communicate()
 
     except TimeoutError:
-        if proc is not None:
-            proc.kill()
-            await proc.wait()
+        if proc is not None and proc.returncode is None:
+            await _kill_process_group(proc)
         logger.warning(
             "test_profile_timeout",
             repo_path=repo_path,
@@ -250,11 +282,7 @@ async def execute_test_profile(
 
     except asyncio.CancelledError:
         if proc is not None and proc.returncode is None:
-            proc.kill()
-            try:
-                await asyncio.shield(proc.wait())
-            except asyncio.CancelledError:
-                pass
+            await _kill_process_group(proc)
         raise
 
     exit_code = proc.returncode
@@ -308,13 +336,13 @@ async def execute_ripgrep_profile(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=repo_path,
+                start_new_session=True,
             )
             stdout_bytes, stderr_bytes = await proc.communicate()
 
     except TimeoutError:
-        if proc is not None:
-            proc.kill()
-            await proc.wait()
+        if proc is not None and proc.returncode is None:
+            await _kill_process_group(proc)
         logger.warning(
             "ripgrep_profile_timeout",
             repo_path=repo_path,
@@ -325,11 +353,7 @@ async def execute_ripgrep_profile(
 
     except asyncio.CancelledError:
         if proc is not None and proc.returncode is None:
-            proc.kill()
-            try:
-                await asyncio.shield(proc.wait())
-            except asyncio.CancelledError:
-                pass
+            await _kill_process_group(proc)
         raise
 
     exit_code = int(proc.returncode)

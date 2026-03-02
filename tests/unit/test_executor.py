@@ -10,9 +10,11 @@ import pytest
 
 from scripts.migrate import apply_migrations
 from src.sohnbot.capabilities.scheduler.executor import (
+    _background_tasks,
     _calculate_current_slot,
     _execute_job_batch,
     _execute_single_job,
+    _send_timeout_notification,
 )
 from src.sohnbot.capabilities.scheduler.job_manager import create_job
 from src.sohnbot.persistence.db import DatabaseManager, set_db_manager
@@ -306,3 +308,33 @@ async def test_cleanup_operation_logs_action_dispatches(setup_database):
         await _dispatch_job_action(job)
 
     mock_cleanup.assert_awaited_once_with(db_path="data/test.db", retention_days=45)
+
+
+@pytest.mark.asyncio
+async def test_timeout_notification_task_is_tracked_and_discarded():
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def fake_enqueue_timeout_notification(**_kwargs):
+        started.set()
+        await finish.wait()
+
+    _background_tasks.clear()
+    with patch(
+        "src.sohnbot.capabilities.scheduler.executor._enqueue_timeout_notification",
+        side_effect=fake_enqueue_timeout_notification,
+    ):
+        _send_timeout_notification(
+            job={"name": "job-a", "action": "heartbeat"},
+            timeout_seconds=30,
+            duration_ms=1000,
+            slot_timestamp=123,
+            operation_id="op-1",
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert len(_background_tasks) == 1
+        finish.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert len(_background_tasks) == 0

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 try:
     import patch as patch_lib
@@ -16,9 +17,29 @@ from .file_ops import FileCapabilityError
 
 logger = structlog.get_logger(__name__)
 
+if TYPE_CHECKING:
+    from ...broker.scope_validator import ScopeValidator
+
 
 class PatchEditor:
     """Applies unified diff patches to in-scope files."""
+
+    def __init__(self, scope_validator: "ScopeValidator | None" = None):
+        self.scope_validator = scope_validator
+
+    def _revalidate_path(self, path: str | Path) -> Path:
+        """Re-validate real path at the I/O boundary before writing."""
+        resolved = Path(os.path.realpath(str(path)))
+        if self.scope_validator is not None:
+            is_valid, error_msg = self.scope_validator.validate_path(str(resolved))
+            if not is_valid:
+                raise FileCapabilityError(
+                    code="scope_violation",
+                    message=error_msg or "Path outside allowed scope",
+                    details={"path": str(path), "resolved_path": str(resolved)},
+                    retryable=False,
+                )
+        return resolved
 
     def apply_patch(
         self, path: str, patch_content: str, patch_max_size_kb: int = 50
@@ -104,9 +125,12 @@ class PatchEditor:
         # 6. Normalize patch paths to the target file's name so the library
         #    can resolve the file relative to its parent directory
         normalized = _normalize_patch_paths(patch_content, str(file_path.name))
-        root = str(file_path.parent)
 
-        # 7. Apply patch
+        # 7. Re-validate immediately before write/apply boundary.
+        safe_file_path = self._revalidate_path(file_path)
+        safe_root = str(safe_file_path.parent)
+
+        # 8. Apply patch
         if patch_lib is not None:
             try:
                 pset = patch_lib.fromstring(normalized.encode())
@@ -126,7 +150,7 @@ class PatchEditor:
                     retryable=False,
                 )
 
-            result = pset.apply(root=root)
+            result = pset.apply(root=safe_root)
             if not result:
                 raise FileCapabilityError(
                     code="patch_apply_failed",
@@ -135,7 +159,7 @@ class PatchEditor:
                     retryable=False,
                 )
         else:
-            _apply_patch_fallback(file_path=file_path, patch_content=normalized)
+            _apply_patch_fallback(file_path=safe_file_path, patch_content=normalized)
 
         logger.info(
             "patch_applied",

@@ -72,8 +72,8 @@ class BrokerRouter:
         """
         self.scope_validator = scope_validator
         self.config_manager = config_manager
-        self.file_ops = FileOps()
-        self.patch_editor = PatchEditor()
+        self.file_ops = FileOps(scope_validator=scope_validator)
+        self.patch_editor = PatchEditor(scope_validator=scope_validator)
         self.snapshot_manager = SnapshotManager()
         self._operation_start_times: Dict[str, float] = {}
         self._profile_counts: Dict[str, int] = {}

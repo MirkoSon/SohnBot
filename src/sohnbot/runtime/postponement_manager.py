@@ -59,6 +59,22 @@ class PostponementManager:
         self._lock = asyncio.Lock()
 
     @staticmethod
+    def _track_task(
+        tasks: dict[str, asyncio.Task],
+        operation_id: str,
+        task: asyncio.Task,
+    ) -> None:
+        """Retain background task reference until completion, then discard."""
+        tasks[operation_id] = task
+
+        def _cleanup(done_task: asyncio.Task) -> None:
+            current = tasks.get(operation_id)
+            if current is done_task:
+                tasks.pop(operation_id, None)
+
+        task.add_done_callback(_cleanup)
+
+    @staticmethod
     def _now_ts() -> int:
         return int(datetime.now().timestamp())
 
@@ -172,7 +188,7 @@ class PostponementManager:
             self._send_retry_notification(pending, delay_seconds=self.retry_delay_seconds),
             name=f"postpone-retry-{pending.operation_id}",
         )
-        self._retry_tasks[pending.operation_id] = retry_task
+        self._track_task(self._retry_tasks, pending.operation_id, retry_task)
 
         cancel_task = asyncio.create_task(
             self._cancel_if_unresolved(
@@ -181,7 +197,7 @@ class PostponementManager:
             ),
             name=f"postpone-cancel-{pending.operation_id}",
         )
-        self._cancel_tasks[pending.operation_id] = cancel_task
+        self._track_task(self._cancel_tasks, pending.operation_id, cancel_task)
 
     async def _send_retry_notification(self, pending: PendingClarification, delay_seconds: int) -> None:
         await asyncio.sleep(max(0, delay_seconds))
@@ -304,14 +320,16 @@ class PostponementManager:
                 (pending.cancel_at or (now + self.retry_delay_seconds + self.cancellation_delay_seconds)) - now,
             )
             if not pending.retry_message_sent:
-                self._retry_tasks[pending.operation_id] = asyncio.create_task(
+                retry_task = asyncio.create_task(
                     self._send_retry_notification(pending, delay_seconds=retry_delay),
                     name=f"postpone-retry-{pending.operation_id}",
                 )
-            self._cancel_tasks[pending.operation_id] = asyncio.create_task(
+                self._track_task(self._retry_tasks, pending.operation_id, retry_task)
+            cancel_task = asyncio.create_task(
                 self._cancel_if_unresolved(pending, delay_seconds=cancel_delay),
                 name=f"postpone-cancel-{pending.operation_id}",
             )
+            self._track_task(self._cancel_tasks, pending.operation_id, cancel_task)
 
     @staticmethod
     def _cancel_task(operation_id: str, tasks: dict[str, asyncio.Task]) -> None:

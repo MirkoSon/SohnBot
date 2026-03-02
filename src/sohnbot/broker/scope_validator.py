@@ -22,7 +22,7 @@ class ScopeValidator:
         """Normalize path separators, expand user home, and resolve safely."""
         normalized = path.replace("\\", "/")
         expanded = os.path.expanduser(normalized)
-        return Path(expanded).resolve(strict=False)
+        return Path(os.path.realpath(expanded))
 
     def _coerce_to_path_string(self, path: Any) -> str:
         """Convert supported path input to string."""
@@ -75,18 +75,23 @@ class ScopeValidator:
         if not path_str:
             return False, "Path outside allowed scope: empty path"
 
-        try:
-            normalized = self._normalize_path(path_str)
-        except (ValueError, RuntimeError) as e:
-            return False, f"Invalid path: {e}"
+        is_valid, _, error_msg = self._resolve_and_validate(path_str)
+        return is_valid, error_msg
 
-        # Check if normalized path starts with any allowed root
+    def _resolve_and_validate(self, path_str: str) -> tuple[bool, Path, str]:
+        """Resolve path with realpath and validate it stays within allowed roots."""
+        try:
+            normalized = path_str.replace("\\", "/")
+            expanded = os.path.expanduser(normalized)
+            resolved = Path(os.path.realpath(expanded))
+        except (ValueError, RuntimeError) as e:
+            return False, Path(path_str), f"Invalid path: {e}"
+
         for root in self.allowed_roots:
             try:
-                normalized.relative_to(root)
-                return True, ""  # Path is within allowed scope
+                resolved.relative_to(root)
+                return True, resolved, ""
             except ValueError:
-                continue  # Try next root
+                continue
 
-        # Path not within any allowed root
-        return False, f"Path outside allowed scope: {path_str}"
+        return False, resolved, f"Path outside allowed scope: {path_str}"

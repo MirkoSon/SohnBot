@@ -1,6 +1,6 @@
 # Story 7.1: Database & Persistence Hardening
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -162,3 +162,36 @@ CREATE INDEX IF NOT EXISTS idx_jobs_enabled_name ON jobs(enabled, name);
 - [Source: _bmad-output/implementation-artifacts/security-audit-findings-v1.md#F-04]
 - [Source: _bmad-output/implementation-artifacts/prd-architecture-adherence-audit-v1.md#A-01]
 - [Source: _bmad-output/implementation-artifacts/prd-architecture-adherence-audit-v1.md#A-10]
+
+---
+
+## Dev Agent Record
+
+### Agent Model Used
+- Claude Opus (via claude.ai/code)
+
+### Completion Notes
+- Migration 0008: widen jobs.action CHECK constraint to include cleanup_operation_logs
+- DatabaseManager: add asyncio.Lock + execute_write / execute_write_many with BEGIN IMMEDIATE for safe concurrent writes
+- web.py / search_volume.py: route all SQLite access through get_db() (DatabaseManager) instead of ad-hoc aiosqlite.connect
+- config/manager.py: implement load_dynamic_config_from_db(), _persist_to_database(), and reset_dynamic_config() for hot-reloadable config stored in SQLite
+- main.py: call load_dynamic_config() at startup; add load_dynamic_config wrapper function
+- __main__.py: add entry point for python -m sohnbot
+- tests: new test_db_write_lock.py, test_config_persistence.py; update test_web.py, test_search_volume.py, test_main.py, test_broker.py to match new API (100 tests pass)
+
+### File List
+- src/sohnbot/__main__.py (new)
+- src/sohnbot/persistence/migrations/0008_widen_jobs_action_check.sql (new)
+- src/sohnbot/persistence/db.py
+- src/sohnbot/capabilities/web.py
+- src/sohnbot/config/manager.py
+- src/sohnbot/main.py
+- src/sohnbot/broker/router.py
+- src/sohnbot/persistence/search_volume.py
+- tests/unit/test_config_persistence.py (new)
+- tests/unit/test_db_write_lock.py (new)
+- tests/unit/test_broker.py
+- tests/unit/test_main.py
+- tests/unit/test_search_volume.py
+- tests/unit/test_web.py
+- _bmad-output/implementation-artifacts/7-1-database-persistence-hardening.md

@@ -1,6 +1,7 @@
 """Unit tests for execute_lint_profile, execute_build_profile, and execute_test_profile capabilities."""
 
 import asyncio
+import signal
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -673,3 +674,63 @@ class TestExecuteRipgrepProfile:
 
         assert result["total_matches"] == 2
         assert len(result["matches"]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("runner", "kwargs"),
+    [
+        ("execute_lint_profile", {"repo_path": "/repo", "command": "pylint", "files": []}),
+        ("execute_build_profile", {"repo_path": "/repo", "command": "make", "target": ""}),
+        ("execute_test_profile", {"repo_path": "/repo", "command": "pytest", "pattern": ""}),
+        ("execute_ripgrep_profile", {"repo_path": "/repo", "pattern": "needle"}),
+    ],
+)
+async def test_profile_subprocesses_use_start_new_session(runner, kwargs):
+    module = __import__(
+        "src.sohnbot.capabilities.command_profiles.profile_executor",
+        fromlist=[runner],
+    )
+    fn = getattr(module, runner)
+
+    mock_proc = AsyncMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        await fn(**kwargs)
+
+    assert mock_exec.call_args.kwargs["start_new_session"] is True
+
+
+@pytest.mark.asyncio
+async def test_timeout_kills_process_group_on_posix():
+    from src.sohnbot.capabilities.command_profiles.profile_executor import execute_lint_profile
+
+    mock_proc = AsyncMock()
+    mock_proc.pid = 4321
+    mock_proc.returncode = None
+    mock_proc.wait = AsyncMock(return_value=0)
+
+    async def slow_communicate():
+        await asyncio.sleep(100)
+        return b"", b""
+
+    mock_proc.communicate = slow_communicate
+
+    with (
+        patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+        patch("src.sohnbot.capabilities.command_profiles.profile_executor.os.getpgid", return_value=4321),
+        patch("src.sohnbot.capabilities.command_profiles.profile_executor.os.killpg") as mock_killpg,
+    ):
+        with pytest.raises(TimeoutError):
+            await execute_lint_profile(
+                repo_path="/repo",
+                command="pylint",
+                files=[],
+                timeout_seconds=0,
+            )
+
+    assert mock_killpg.call_count >= 1
+    first_call = mock_killpg.call_args_list[0]
+    assert first_call.args == (4321, signal.SIGTERM)

@@ -1,6 +1,6 @@
 # Story 7.3: Scope Validation TOCTOU Mitigation
 
-Status: draft
+Status: done
 
 ## Story
 
@@ -34,34 +34,34 @@ So that a path cannot pass validation and then be swapped to point outside scope
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Harden ScopeValidator.validate_path() (AC: 1, 3, 4)
-  - [ ] Replace `Path(expanded).resolve(strict=False)` with `os.path.realpath(expanded)` for symlink resolution
-  - [ ] Add a separate `_resolve_and_validate(path_str)` method that:
+- [x] Task 1: Harden ScopeValidator.validate_path() (AC: 1, 3, 4)
+  - [x] Replace `Path(expanded).resolve(strict=False)` with `os.path.realpath(expanded)` for symlink resolution
+  - [x] Add a separate `_resolve_and_validate(path_str)` method that:
     1. Calls `os.path.realpath(path_str)` to resolve ALL symlinks
     2. Compares the resolved path against `self.allowed_roots`
     3. Returns `(is_valid, resolved_path, error_message)`
-  - [ ] Update `validate_path()` to use `_resolve_and_validate()`
-  - [ ] Ensure `_normalize_path()` also uses `os.path.realpath()` for root initialization
+  - [x] Update `validate_path()` to use `_resolve_and_validate()`
+  - [x] Ensure `_normalize_path()` also uses `os.path.realpath()` for root initialization
 
-- [ ] Task 2: Add re-validation at file I/O boundary (AC: 2)
-  - [ ] Modify `file_ops.py:read_file()` — call `os.path.realpath(file_path)` immediately before `Path.read_text()` and re-validate via `ScopeValidator.validate_path()`
-  - [ ] Modify `file_ops.py:list_files()` — call `os.path.realpath(directory)` immediately before `Path.iterdir()` and re-validate
-  - [ ] Modify `patch_editor.py:apply_patch()` — call `os.path.realpath(file_path)` immediately before file write and re-validate
-  - [ ] Each re-validation failure raises `FileCapabilityError(code="scope_violation", ...)`
-  - [ ] Note: This does NOT eliminate TOCTOU entirely (that requires kernel-level `O_NOFOLLOW`) but reduces the race window to microseconds
+- [x] Task 2: Add re-validation at file I/O boundary (AC: 2)
+  - [x] Modify `file_ops.py:read_file()` — call `os.path.realpath(file_path)` immediately before `Path.read_text()` and re-validate via `ScopeValidator.validate_path()`
+  - [x] Modify `file_ops.py:list_files()` — call `os.path.realpath(directory)` immediately before `Path.iterdir()` and re-validate
+  - [x] Modify `patch_editor.py:apply_patch()` — call `os.path.realpath(file_path)` immediately before file write and re-validate
+  - [x] Each re-validation failure raises `FileCapabilityError(code="scope_violation", ...)`
+  - [x] Note: This does NOT eliminate TOCTOU entirely (that requires kernel-level `O_NOFOLLOW`) but reduces the race window to microseconds
 
-- [ ] Task 3: Pass ScopeValidator to FileOps and PatchEditor (AC: 2)
-  - [ ] Ensure `FileOps.__init__` and `PatchEditor.__init__` accept a `scope_validator` parameter (verify they already do; if not, add)
-  - [ ] Add `self._revalidate_path(path)` convenience method to both classes that calls `self.scope_validator.validate_path(os.path.realpath(path))`
-  - [ ] Use `self._revalidate_path()` at the I/O boundary points identified in Task 2
+- [x] Task 3: Pass ScopeValidator to FileOps and PatchEditor (AC: 2)
+  - [x] Ensure `FileOps.__init__` and `PatchEditor.__init__` accept a `scope_validator` parameter (verify they already do; if not, add)
+  - [x] Add `self._revalidate_path(path)` convenience method to both classes that calls `self.scope_validator.validate_path(os.path.realpath(path))`
+  - [x] Use `self._revalidate_path()` at the I/O boundary points identified in Task 2
 
-- [ ] Task 4: Testing (AC: all)
-  - [ ] Test: symlink inside scope pointing outside scope is rejected
-  - [ ] Test: nested symlink chain (A -> B -> C, C outside scope) is rejected
-  - [ ] Test: symlink inside scope pointing to another valid location inside scope is accepted
-  - [ ] Test: non-existent path inside scope is accepted
-  - [ ] Test: re-validation at I/O boundary catches path changes (mock `os.path.realpath` to return different values on 2nd call)
-  - [ ] Test: regular paths (no symlinks) continue to work unchanged
+- [x] Task 4: Testing (AC: all)
+  - [x] Test: symlink inside scope pointing outside scope is rejected
+  - [x] Test: nested symlink chain (A -> B -> C, C outside scope) is rejected
+  - [x] Test: symlink inside scope pointing to another valid location inside scope is accepted
+  - [x] Test: non-existent path inside scope is accepted
+  - [x] Test: re-validation at I/O boundary catches path changes (mock `os.path.realpath` to return different values on 2nd call)
+  - [x] Test: regular paths (no symlinks) continue to work unchanged
 
 ## Dev Notes
 
@@ -111,3 +111,44 @@ So that a path cannot pass validation and then be swapped to point outside scope
 - [Source: _bmad-output/implementation-artifacts/security-audit-findings-v1.md#F-03]
 - [Source: docs/PRD.md#DR-002 — Scope Isolation & Path Traversal Prevention]
 - [Source: _bmad-output/planning-artifacts/architecture.md — Safety boundary: Scope Validation]
+
+## Dev Agent Record
+
+### Debug Log
+
+- Implemented `ScopeValidator` hardening via `os.path.realpath()` and `_resolve_and_validate()`.
+- Added boundary re-validation helpers to `FileOps` and `PatchEditor`, and injected broker `scope_validator` into both.
+- Added TOCTOU-focused unit tests for symlink behavior and boundary re-validation failure paths.
+- `pytest` could not be executed in this environment (`pytest` and `poetry` commands unavailable).
+
+### Completion Notes
+
+- Scope checks now resolve real paths both during initial validation and immediately before I/O.
+- File capability operations now raise structured `scope_violation` errors if boundary re-validation fails.
+- Added explicit tests for symlink chain rejection (`A -> B -> C` outside scope) and non-existent in-scope path acceptance.
+
+### File List
+- src/sohnbot/broker/scope_validator.py
+- src/sohnbot/capabilities/files/file_ops.py
+- src/sohnbot/capabilities/files/patch_editor.py
+- src/sohnbot/broker/router.py
+- tests/unit/test_scope_validator_toctou.py (new)
+- tests/unit/test_file_ops.py
+- tests/unit/test_patch_editor.py
+- tests/unit/test_broker.py
+- _bmad-output/implementation-artifacts/7-3-scope-validation-toctou-mitigation.md
+
+## File List
+
+- src/sohnbot/broker/scope_validator.py
+- src/sohnbot/capabilities/files/file_ops.py
+- src/sohnbot/capabilities/files/patch_editor.py
+- src/sohnbot/broker/router.py
+- tests/unit/test_scope_validator_toctou.py
+- tests/unit/test_file_ops.py
+- tests/unit/test_patch_editor.py
+- tests/unit/test_broker.py
+
+## Change Log
+
+- 2026-03-02: Implemented Story 7.3 TOCTOU mitigations and added unit tests for symlink-chain and I/O-boundary re-validation behavior.

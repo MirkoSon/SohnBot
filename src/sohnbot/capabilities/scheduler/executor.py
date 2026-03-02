@@ -22,6 +22,7 @@ from .job_manager import list_jobs
 from .timezone_handler import handle_dst_transition
 
 logger = structlog.get_logger(__name__)
+_background_tasks: set[asyncio.Task[Any]] = set()
 
 
 def _utc_now() -> datetime:
@@ -236,7 +237,9 @@ def _send_timeout_notification(
                 error=str(exc),
             )
 
-    asyncio.create_task(_runner(), name=f"scheduler-timeout-notify-{job.get('name', 'unknown')}")
+    task = asyncio.create_task(_runner(), name=f"scheduler-timeout-notify-{job.get('name', 'unknown')}")
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def _execute_single_job(job: dict[str, Any]) -> None:

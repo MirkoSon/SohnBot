@@ -83,6 +83,17 @@ def test_validate_path_relative_to_absolute(tmp_path):
     assert "outside allowed scope" in error
 
 
+def test_router_injects_scope_validator_into_file_capabilities(tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+
+    router = BrokerRouter(validator)
+
+    assert router.file_ops.scope_validator is validator
+    assert router.patch_editor.scope_validator is validator
+
+
 # Operation Classification Tests
 
 def test_classify_tier_0_read_operations():

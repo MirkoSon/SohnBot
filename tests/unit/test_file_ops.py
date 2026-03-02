@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.sohnbot.capabilities.files.file_ops import FileCapabilityError, FileOps
+from src.sohnbot.broker.scope_validator import ScopeValidator
 
 
 def test_list_files_includes_metadata_and_excludes_dirs(tmp_path):
@@ -112,3 +113,25 @@ async def test_search_files_timeout(tmp_path, monkeypatch):
     err = exc.value.to_dict()
     assert err["code"] == "search_timeout"
 
+
+def test_read_file_revalidates_scope_at_io_boundary(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    target = root / "note.txt"
+    target.write_text("hello")
+
+    validator = ScopeValidator([str(root)])
+    file_ops = FileOps(scope_validator=validator)
+
+    calls = iter([str(target), "/etc/passwd"])
+
+    def fake_realpath(_path: str) -> str:
+        return next(calls)
+
+    monkeypatch.setattr("src.sohnbot.capabilities.files.file_ops.os.path.realpath", fake_realpath)
+
+    with pytest.raises(FileCapabilityError) as exc:
+        file_ops.read_file(str(target), max_size_mb=10)
+
+    err = exc.value.to_dict()
+    assert err["code"] == "scope_violation"

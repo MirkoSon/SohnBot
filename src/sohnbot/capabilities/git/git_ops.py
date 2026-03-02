@@ -47,6 +47,11 @@ async def _run_git_command(
             details={"repo_path": repo_path, "command": cmd},
             retryable=True,
         ) from exc
+    except asyncio.CancelledError:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+        raise
 
     stdout = stdout_b.decode("utf-8", errors="replace")
     stderr = stderr_b.decode("utf-8", errors="replace").strip()
