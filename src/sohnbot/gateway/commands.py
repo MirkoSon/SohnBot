@@ -651,3 +651,52 @@ async def handle_heartbeat_command(chat_id: str, command_text: str) -> str:
         return f"✅ Heartbeat enabled. Next report: {next_run}"
 
     return "Unknown subcommand. Usage:\n/heartbeat status | configure | disable | enable"
+
+
+async def handle_help_command() -> str:
+    """Handle /help command - show all available commands."""
+    return """
+🤖 **SohnBot Commands**
+
+**System Information:**
+• `/help` - Show this help message
+• `/status` - View system status and active operations
+• `/health` - Check system health and component status
+• `/logs [filters]` - Query operation logs
+  Examples: `/logs status=failed` `/logs capability=fs limit=10`
+
+**Configuration:**
+• `/config list` - List all configuration keys
+• `/config get <key>` - Get a configuration value
+• `/config set <key> <value>` - Update a dynamic setting
+  Example: `/config set logging.level DEBUG`
+
+**Notifications:**
+• `/notify on` - Enable operation notifications
+• `/notify off` - Disable notifications
+• `/notify status` - Check notification status
+
+**Scheduled Jobs:**
+• `/schedule list` - List all scheduled jobs
+• `/schedule create --name <name> --cron <expr> --action <action> --timezone <tz>`
+  Example: `/schedule create --name backup --cron "0 2 * * *" --action snapshot_health --timezone UTC`
+• `/schedule enable <name>` - Enable a job
+• `/schedule disable <name>` - Disable a job
+• `/schedule delete <name>` - Delete a job
+• `/schedule info <name>` - View job details
+
+**Daily Heartbeat:**
+• `/heartbeat enable` - Enable daily health report
+• `/heartbeat disable` - Disable daily report
+• `/heartbeat status` - Check heartbeat status
+
+**Natural Language:**
+You can also ask me to do things naturally:
+• "Search for 'def main' in src/"
+• "Read the README.md file"
+• "List Python files in tests/"
+• "Show git status"
+• "Search the web for Python async patterns"
+
+📖 **Full documentation:** See `docs/USER_GUIDE.md`
+    """.strip()

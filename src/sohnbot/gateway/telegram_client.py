@@ -16,6 +16,7 @@ from .commands import (
     handle_config_command,
     handle_heartbeat_command,
     handle_health_command,
+    handle_help_command,
     handle_logs_command,
     handle_notify_command,
     handle_schedule_command,
@@ -240,15 +241,8 @@ class TelegramClient:
             logger.warning("unauthorized_help_command", chat_id=chat_id)
             return
 
-        await update.message.reply_text(
-            "📚 SohnBot Help\n\n"
-            "Just send me a message describing what you want to do!\n\n"
-            "Examples:\n"
-            "- List files in ~/Projects\n"
-            "- Read README.md\n"
-            "- Show git status\n\n"
-            "All operations are logged and scoped to authorized directories."
-        )
+        response = await handle_help_command()
+        await update.message.reply_text(response)
 
     async def cmd_notify(self, update: Update, context):
         """Handle /notify on|off|status command."""

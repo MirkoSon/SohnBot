@@ -82,6 +82,16 @@ Configuration is managed through:
 
 See `config/default.toml` for all available configuration options.
 
+## User Guide
+
+**📖 For end users:** See **[USER_GUIDE.md](docs/USER_GUIDE.md)** for:
+- Complete command reference
+- Natural language examples
+- Safety features and best practices
+- Troubleshooting guide
+
+**Quick start:** Send `/help` to the bot for a command overview.
+
 ## Project Structure
 
 ```
