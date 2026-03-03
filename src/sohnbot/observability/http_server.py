@@ -109,7 +109,7 @@ def _render_scheduler_rows(jobs: list[dict]) -> str:
 
 
 def _render_error_rows(operations: list[dict]) -> str:
-    errors = [op for op in operations if op.get("status") == "error"][:10]
+    errors = [op for op in operations if op.get("status") in {"error", "failed"}][:10]
     if not errors:
         return "<tr><td colspan='4'>No recent errors</td></tr>"
 

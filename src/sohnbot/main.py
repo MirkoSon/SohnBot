@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import os
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 import structlog
+from scripts.migrate import apply_migrations
 
-from .broker.router import Broker
+from .broker.router import BrokerRouter
 from .broker.scope_validator import ScopeValidator
 from .capabilities.scheduler import create_job, get_job_by_name
 from .config.manager import get_config_manager
@@ -18,6 +21,7 @@ from .gateway.message_router import MessageRouter
 from .gateway.telegram_client import TelegramClient
 from .observability.http_server import http_server_loop
 from .observability.snapshot_collector import snapshot_collector_loop
+from .persistence.db import DatabaseManager, set_db_manager
 from .persistence.notification import enqueue_notification
 from .runtime.agent_session import AgentSession
 
@@ -115,6 +119,19 @@ async def load_dynamic_config() -> None:
 async def run_main() -> None:
     """Run SohnBot with Telegram gateway and background runtime tasks."""
     config = get_config_manager()
+
+    # Apply DB migrations before any runtime component reads/writes tables.
+    db_path = Path(str(config.get("database.path")))
+    if not db_path.is_absolute():
+        db_path = Path.cwd() / db_path
+    migrations_dir = Path(__file__).parent / "persistence" / "migrations"
+    apply_migrations(db_path, migrations_dir)
+
+    # Initialize global DB manager after migrations are applied.
+    db_manager = DatabaseManager(db_path)
+    set_db_manager(db_manager)
+    await db_manager.init_db()
+
     await load_dynamic_config()
 
     # Load telegram configuration
@@ -125,8 +142,31 @@ async def run_main() -> None:
 
     # Load allowed chat IDs from config
     try:
-        allowed_chat_ids_str = str(config.get("telegram.allowed_chat_ids"))
-        allowed_chat_ids = [int(cid.strip()) for cid in allowed_chat_ids_str.split(",") if cid.strip()]
+        raw_allowed_chat_ids = config.get("telegram.allowed_chat_ids")
+        parsed_values: list[object]
+        if isinstance(raw_allowed_chat_ids, list):
+            parsed_values = raw_allowed_chat_ids
+        elif isinstance(raw_allowed_chat_ids, str):
+            text = raw_allowed_chat_ids.strip()
+            if text.startswith("[") and text.endswith("]"):
+                try:
+                    literal = ast.literal_eval(text)
+                    parsed_values = literal if isinstance(literal, list) else [literal]
+                except (ValueError, SyntaxError):
+                    parsed_values = [part.strip() for part in text.split(",") if part.strip()]
+            else:
+                parsed_values = [part.strip() for part in text.split(",") if part.strip()]
+        else:
+            parsed_values = [raw_allowed_chat_ids]
+
+        allowed_chat_ids = []
+        for value in parsed_values:
+            if value is None:
+                continue
+            text = str(value).strip().strip("'\"")
+            if not text:
+                continue
+            allowed_chat_ids.append(int(text))
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram_allowed_chat_ids_parse_failed", error=str(exc))
         allowed_chat_ids = []
@@ -144,9 +184,9 @@ async def run_main() -> None:
         )
 
     # Initialize core components
-    scope_validator = ScopeValidator(config=config)
-    broker = Broker(scope_validator=scope_validator, config=config)
-    agent_session = AgentSession(broker=broker, config=config)
+    scope_validator = ScopeValidator(allowed_roots=config.get("scope.allowed_roots"))
+    broker = BrokerRouter(scope_validator=scope_validator, config_manager=config)
+    agent_session = AgentSession(config_manager=config, broker_router=broker)
 
     # Initialize agent session (loads Claude SDK, MCP server, hooks)
     await agent_session.initialize()
@@ -223,6 +263,10 @@ async def _safe_telegram_gateway(telegram_client: TelegramClient) -> None:
             await telegram_client.stop()
             raise
         except Exception as exc:  # noqa: BLE001
+            try:
+                await telegram_client.stop()
+            except Exception:  # noqa: BLE001
+                pass
             consecutive_failures += 1
             logger.error(
                 "telegram_gateway_crash",

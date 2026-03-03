@@ -79,7 +79,7 @@ class MessageRouter:
             )
 
             # Postponement only works with Claude (requires MCP tools)
-            if selected_mode == AgentMode.CLAUDE:
+            if selected_mode == AgentMode.CLAUDE and getattr(self.agent_session, "enable_ambiguity_guard", False):
                 if await self.agent_session.postponement_manager.has_pending(chat_id):
                     pending = await self.agent_session.postponement_manager.resolve(
                         chat_id=chat_id,

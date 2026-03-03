@@ -333,7 +333,10 @@ async def _execute_single_job(job: dict[str, Any]) -> None:
             return
 
         try:
-            await asyncio.wait_for(_dispatch_job_action(job), timeout=timeout_seconds)
+            await asyncio.wait_for(
+                _dispatch_job_action(job, operation_id=operation_id),
+                timeout=timeout_seconds,
+            )
         except asyncio.TimeoutError:
             duration_ms = int((time.perf_counter() - started) * 1000)
             await _update_last_completed_slot(str(job["id"]), slot_timestamp)
@@ -426,7 +429,7 @@ async def _execute_single_job(job: dict[str, Any]) -> None:
         )
 
 
-async def _dispatch_job_action(job: dict[str, Any]) -> None:
+async def _dispatch_job_action(job: dict[str, Any], operation_id: str) -> None:
     """Dispatch scheduler action type for one job execution."""
     action = str(job["action"])
     params = job.get("action_params") or {}
@@ -473,7 +476,7 @@ async def _dispatch_job_action(job: dict[str, Any]) -> None:
             return
 
         await enqueue_notification(
-            operation_id=f"heartbeat-{uuid.uuid4()}",
+            operation_id=operation_id,
             chat_id=admin_chat_id,
             message_text=report,
         )

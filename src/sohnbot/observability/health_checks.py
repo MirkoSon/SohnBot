@@ -150,6 +150,16 @@ def check_notifier_alive(notifier_state: NotifierState) -> HealthCheckResult:
     """Check if notification worker is making progress."""
     now = _now()
     try:
+        # Idle notifier with no pending work is healthy, even if last attempt was long ago.
+        if notifier_state.pending_count == 0:
+            return HealthCheckResult(
+                name="notifier_alive",
+                status="pass",
+                message="Notifier idle (no pending notifications)",
+                timestamp=now,
+                details={"pending_count": 0},
+            )
+
         if notifier_state.last_attempt_timestamp == 0:
             return HealthCheckResult(
                 name="notifier_alive",

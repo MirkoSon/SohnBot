@@ -4,6 +4,7 @@ Telegram Bot Client.
 Handles Telegram Bot API integration with chat ID authentication.
 """
 
+import asyncio
 from uuid import uuid4
 
 import structlog
@@ -102,6 +103,14 @@ class TelegramClient:
         await self.notification_worker.start()
 
         logger.info("telegram_bot_started")
+
+        # Keep this coroutine alive while polling runs. If polling stops,
+        # return so the supervisor can apply restart/backoff policy.
+        wait_until_closed = getattr(self.application.updater, "wait_until_closed", None)
+        if callable(wait_until_closed):
+            await wait_until_closed()
+        else:
+            await asyncio.Event().wait()
 
     async def stop(self):
         """Stop the bot gracefully."""

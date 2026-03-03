@@ -86,6 +86,7 @@ class ConfigKey:
         max_value: Maximum value for numeric types (optional)
         restart_required: Auto-derived from tier (True for static, False for dynamic)
         validator: Custom validation function (optional)
+        description: Optional human-readable description for UI/help surfaces
     """
     tier: Literal["static", "dynamic"]
     value_type: type
@@ -94,6 +95,7 @@ class ConfigKey:
     max_value: Optional[Any] = None
     restart_required: bool = False
     validator: Optional[Callable[[Any], bool]] = None
+    description: Optional[str] = None
 
     def __post_init__(self):
         """Auto-derive restart_required from tier."""

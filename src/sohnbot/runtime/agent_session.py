@@ -40,6 +40,9 @@ class AgentSession:
         self.client = None
         self.postponement_manager = PostponementManager()
         self.ambiguity_evaluator = ambiguity_evaluator
+        # Ambiguity guard is intentionally disabled: Claude should decide whether
+        # to ask follow-up questions or proceed with tool selection.
+        self.enable_ambiguity_guard = False
 
     async def initialize(self):
         """Initialize Claude SDK client with MCP server and hooks."""
@@ -71,14 +74,20 @@ class AgentSession:
         gemini_mcp_path = os.getenv("GEMINI_MCP_SERVER_PATH")
 
         if gemini_api_key and gemini_mcp_path:
-            from claude_agent_sdk import StdioServerParameters
-
-            mcp_servers["gemini"] = StdioServerParameters(
-                command="npx",
-                args=["tsx", gemini_mcp_path],
-                env={"GEMINI_API_KEY": gemini_api_key}
-            )
-            logger.info("gemini_mcp_server_configured", path=gemini_mcp_path)
+            try:
+                from claude_agent_sdk import StdioServerParameters
+            except ImportError:
+                logger.warning(
+                    "gemini_mcp_server_skipped",
+                    reason="StdioServerParameters unavailable in installed claude_agent_sdk",
+                )
+            else:
+                mcp_servers["gemini"] = StdioServerParameters(
+                    command="npx",
+                    args=["tsx", gemini_mcp_path],
+                    env={"GEMINI_API_KEY": gemini_api_key}
+                )
+                logger.info("gemini_mcp_server_configured", path=gemini_mcp_path)
 
         # Build options
         options = ClaudeAgentOptions(
@@ -126,7 +135,8 @@ class AgentSession:
         # Initialize client
         self.client = ClaudeSDKClient(options=options)
         await self.client.__aenter__()
-        await self.postponement_manager.recover_pending()
+        if self.enable_ambiguity_guard:
+            await self.postponement_manager.recover_pending()
 
         logger.info("agent_session_initialized")
 
@@ -181,7 +191,12 @@ class AgentSession:
             dry_run=dry_run,
         )
 
-        if not skip_ambiguity_check and send_message and self._is_ambiguous_prompt(prompt):
+        if (
+            self.enable_ambiguity_guard
+            and not skip_ambiguity_check
+            and send_message
+            and self._is_ambiguous_prompt(prompt)
+        ):
             options = self._generate_clarification_options(prompt)
             operation_id = str(uuid4())
             await log_operation_start(
