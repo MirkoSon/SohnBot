@@ -26,6 +26,7 @@ SohnBot is an autonomous agent that executes file operations, git commands, sche
   - **Option A**: OAuth Token (recommended for Claude Pro/Max users) - get via `claude setup-token`
   - **Option B**: Anthropic API Key (pay-per-use) - get from https://console.anthropic.com/
 - Brave Search API Key (optional, for web search)
+- Google API Key (optional, for Gemini delegation to save Claude quota)
 
 ## Installation
 
@@ -160,6 +161,60 @@ You should see log output showing:
 4. Send `/help` to see all available commands
 
 **Note:** Only chat IDs in `SOHNBOT_TELEGRAM_ALLOWED_CHAT_IDS` will be able to interact with the bot. Unauthorized messages are silently ignored.
+
+## Cost Optimization with Gemini Delegation
+
+SohnBot supports delegating complex reasoning tasks to Google's Gemini Pro to save Claude quota:
+
+### Why Use Gemini Delegation?
+
+- **Save Claude Quota**: Offload complex reasoning to Gemini (much cheaper)
+- **Automatic Cost Optimization**: Claude (Haiku) orchestrates, Gemini does heavy lifting
+- **Transparent**: Works as a tool Claude can use when appropriate
+
+### Setup Gemini Delegation
+
+1. **Get Google API Key:**
+   ```bash
+   # Visit: https://aistudio.google.com/app/apikey
+   # Create an API key
+   ```
+
+2. **Add to .env:**
+   ```bash
+   GOOGLE_API_KEY=your_google_api_key_here
+   ```
+
+3. **Install dependency:**
+   ```bash
+   poetry add google-generativeai
+   ```
+
+### How It Works
+
+Claude (running on Haiku) can automatically delegate tasks to Gemini when it determines that:
+- The task is complex reasoning without file operations
+- Code analysis or review is needed
+- Long document summarization would be helpful
+- Research synthesis is required
+
+**Example conversation:**
+```
+You: "Analyze this code snippet and suggest optimizations: [long code]"
+Claude: [Uses ai__delegate_to_gemini tool]
+Gemini: [Performs detailed analysis]
+Claude: [Formats and presents Gemini's response]
+```
+
+### Cost Comparison
+
+| Model | Input (per 1M tokens) | Output (per 1M tokens) |
+|-------|----------------------|------------------------|
+| Claude Haiku 4.5 | $0.25 | $1.25 |
+| Claude Sonnet 4.6 | $3.00 | $15.00 |
+| **Gemini 2.0 Flash** | **$0.075** | **$0.30** |
+
+**Savings**: Gemini is ~3-10x cheaper than Claude for complex reasoning!
 
 ## User Guide
 

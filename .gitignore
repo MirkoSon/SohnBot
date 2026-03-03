@@ -69,6 +69,7 @@ data/
 *.key
 *.pem
 credentials.json
+.claude/settings.json
 
 # Temporary files
 *.tmp

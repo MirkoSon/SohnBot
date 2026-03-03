@@ -13,6 +13,7 @@ from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from .commands import (
+    handle_agent_command,
     handle_config_command,
     handle_heartbeat_command,
     handle_health_command,
@@ -81,6 +82,7 @@ class TelegramClient:
         )
         self.application.add_handler(CommandHandler("start", self.cmd_start))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
+        self.application.add_handler(CommandHandler("agent", self.cmd_agent))
         self.application.add_handler(CommandHandler("notify", self.cmd_notify))
         self.application.add_handler(CommandHandler("status", self.cmd_status))
         self.application.add_handler(CommandHandler("health", self.cmd_health))
@@ -242,6 +244,21 @@ class TelegramClient:
             return
 
         response = await handle_help_command()
+        await update.message.reply_text(response)
+
+    async def cmd_agent(self, update: Update, context):
+        """Handle /agent command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+
+        # Check authorization
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_agent_command", chat_id=chat_id)
+            return
+
+        response = await handle_agent_command()
         await update.message.reply_text(response)
 
     async def cmd_notify(self, update: Update, context):

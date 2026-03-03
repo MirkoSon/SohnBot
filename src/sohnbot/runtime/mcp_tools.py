@@ -18,6 +18,7 @@ from ..capabilities.observe import (
 )
 from ..capabilities.result_types import CapabilityResult
 from ..capabilities.scheduler.timezone_handler import get_dst_transition_count
+from .gemini_delegate import delegate_to_gemini, GeminiDelegateError
 
 logger = structlog.get_logger(__name__)
 
@@ -843,6 +844,100 @@ def create_sohnbot_mcp_server(broker, config):
             lines.append(f"{idx}. {title}\n{url}\n{snippet}")
         return _as_mcp_text("\n\n".join(lines))
 
+    @tool(
+        "ai__delegate_to_gemini",
+        "Delegate complex reasoning to Gemini Pro (saves Claude quota)",
+        {"prompt": str, "max_tokens": int}
+    )
+    async def ai_delegate_to_gemini(args):
+        """
+        Delegate complex reasoning tasks to Gemini Pro to save Claude quota.
+
+        ⚠️ SECURITY WARNING: This sends data to Google's API (outside trust boundary).
+        Only use for non-sensitive analysis tasks.
+
+        Use this for tasks that don't require SohnBot capabilities:
+        - Code analysis and review
+        - Long document summarization
+        - Research synthesis and explanation
+        - Complex reasoning without file operations
+        - Data analysis and interpretation
+
+        Do NOT use for tasks requiring:
+        - File read/write operations
+        - Git operations
+        - Scheduled jobs
+        - Web search (use web__search instead)
+
+        Do NOT include:
+        - Secrets or API keys
+        - Sensitive file contents
+        - Private business logic
+        """
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        prompt = args.get("prompt", "")
+        max_tokens = args.get("max_tokens", 8000)
+
+        # Check if Gemini delegation is enabled (opt-in security gate)
+        delegation_enabled = config.get("runtime.gemini_delegation_enabled")
+        if not delegation_enabled:
+            logger.warning(
+                "gemini_delegation_blocked",
+                chat_id=chat_id,
+                reason="disabled_in_config"
+            )
+            return _as_mcp_text(
+                "❌ Gemini delegation is disabled.\n\n"
+                "To enable (⚠️ data will be sent to Google):\n"
+                "/config set runtime.gemini_delegation_enabled true\n\n"
+                "Security note: Delegated prompts are sent to Google's API."
+            )
+
+        if not prompt or not prompt.strip():
+            return _as_mcp_text("❌ Error: prompt cannot be empty")
+
+        if not isinstance(max_tokens, int) or max_tokens < 100 or max_tokens > 32000:
+            return _as_mcp_text("❌ Error: max_tokens must be between 100 and 32000")
+
+        logger.info(
+            "mcp_tool_invoked",
+            tool="ai__delegate_to_gemini",
+            chat_id=chat_id,
+            prompt_length=len(prompt),
+            max_tokens=max_tokens,
+        )
+
+        try:
+            response = await delegate_to_gemini(prompt=prompt, max_tokens=max_tokens)
+            logger.info(
+                "gemini_delegation_successful",
+                chat_id=chat_id,
+                response_length=len(response),
+            )
+            return _as_mcp_text(f"🤖 Gemini Response:\n\n{response}")
+
+        except GeminiDelegateError as exc:
+            logger.error(
+                "gemini_delegation_error",
+                chat_id=chat_id,
+                error_code=exc.code,
+                error_message=exc.message,
+            )
+            return _as_mcp_text(
+                f"❌ Gemini delegation failed ({exc.code}): {exc.message}\n\n"
+                f"Tip: Ensure GOOGLE_API_KEY is set in .env and google-generativeai is installed."
+            )
+
+        except Exception as exc:
+            logger.error(
+                "gemini_delegation_unexpected_error",
+                chat_id=chat_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return _as_mcp_text(f"❌ Unexpected error during Gemini delegation: {str(exc)}")
+
     @tool("observe__status", "Get current system status snapshot", {})
     async def observe_status(args):
         """Read latest status snapshot from in-memory observability cache."""
@@ -1020,6 +1115,7 @@ def create_sohnbot_mcp_server(broker, config):
             profiles_test,
             profiles_ripgrep,
             web_search,
+            ai_delegate_to_gemini,
             observe_status,
             observe_resources,
             observe_health,

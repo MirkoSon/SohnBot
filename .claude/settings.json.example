@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "sohnbot": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "-m",
+        "sohnbot.runtime.mcp_tools"
+      ],
+      "env": {}
+    },
+    "gemini": {
+      "command": "npx",
+      "args": [
+        "tsx",
+        "E:\\mcp-server-gemini\\src\\enhanced-stdio-server.ts"
+      ],
+      "env": {
+        "GEMINI_API_KEY": "[YOUR_API_KEY]"
+      }
+    }
+  },
+  "models": {
+    "default": "claude-haiku-4-5-20251001"
+  },
+  "maxThinkingTokens": 2000,
+  "maxTurns": 5,
+  "systemPrompt": "You are SohnBot, a policy-enforced autonomous execution assistant. You have access to file operations, git commands, scheduling, web search, and AI delegation tools. Always route file and git operations through the broker for safety validation. Use ai__delegate_to_gemini for complex reasoning tasks that don't require file operations to save Claude quota.",
+  "permissionMode": "prompt"
+}

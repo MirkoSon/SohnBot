@@ -428,6 +428,12 @@ REGISTRY: dict[str, ConfigKey] = {
         min_value=1000,
         max_value=32000,
     ),
+    "runtime.gemini_delegation_enabled": ConfigKey(
+        tier="dynamic",
+        value_type=bool,
+        default=False,
+        description="Allow Claude to delegate tasks to Gemini (data leaves trust boundary)",
+    ),
     "runtime.dev_max_thinking_tokens": ConfigKey(
         tier="dynamic",
         value_type=int,

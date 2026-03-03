@@ -24,6 +24,7 @@ from ..persistence.notification import (
     set_notifications_enabled,
 )
 from ..persistence.operation_logs import query_operation_logs
+from ..runtime.agent_selector import get_agent_status
 
 _schedule_broker: Any = None
 
@@ -653,6 +654,12 @@ async def handle_heartbeat_command(chat_id: str, command_text: str) -> str:
     return "Unknown subcommand. Usage:\n/heartbeat status | configure | disable | enable"
 
 
+async def handle_agent_command() -> str:
+    """Handle /agent command - show current agent mode and status."""
+    status = get_agent_status()
+    return status.get_status_message()
+
+
 async def handle_help_command() -> str:
     """Handle /help command - show all available commands."""
     return """
@@ -660,6 +667,7 @@ async def handle_help_command() -> str:
 
 **System Information:**
 • `/help` - Show this help message
+• `/agent` - Check current agent mode (Claude or Gemini fallback)
 • `/status` - View system status and active operations
 • `/health` - Check system health and component status
 • `/logs [filters]` - Query operation logs

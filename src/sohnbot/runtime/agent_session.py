@@ -4,6 +4,7 @@ Claude Agent SDK Session Management.
 Wrapper for ClaudeSDKClient with SohnBot-specific configuration.
 """
 
+import os
 from pathlib import Path
 import inspect
 from typing import Awaitable, Callable
@@ -62,12 +63,29 @@ class AgentSession:
             max_turns=max_turns
         )
 
+        # Configure MCP servers
+        mcp_servers = {"sohnbot": mcp_server}
+
+        # Add external Gemini MCP server if configured
+        gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        gemini_mcp_path = os.getenv("GEMINI_MCP_SERVER_PATH")
+
+        if gemini_api_key and gemini_mcp_path:
+            from claude_agent_sdk import StdioServerParameters
+
+            mcp_servers["gemini"] = StdioServerParameters(
+                command="npx",
+                args=["tsx", gemini_mcp_path],
+                env={"GEMINI_API_KEY": gemini_api_key}
+            )
+            logger.info("gemini_mcp_server_configured", path=gemini_mcp_path)
+
         # Build options
         options = ClaudeAgentOptions(
             model=model,
             max_thinking_tokens=max_thinking,
             max_turns=max_turns,
-            mcp_servers={"sohnbot": mcp_server},
+            mcp_servers=mcp_servers,
             allowed_tools=[
                 "mcp__sohnbot__fs__read",
                 "mcp__sohnbot__fs__list",
@@ -92,6 +110,7 @@ class AgentSession:
                 "mcp__sohnbot__profiles__test",
                 "mcp__sohnbot__profiles__ripgrep",
                 "mcp__sohnbot__web__search",
+                "mcp__sohnbot__ai__delegate_to_gemini",
                 "mcp__sohnbot__observe__status",
                 "mcp__sohnbot__observe__resources",
                 "mcp__sohnbot__observe__health",
