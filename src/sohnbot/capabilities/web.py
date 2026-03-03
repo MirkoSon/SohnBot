@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+from urllib.parse import urlparse
 from uuid import uuid4
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,7 @@ logger = structlog.get_logger(__name__)
 BRAVE_SEARCH_API_URL = "https://api.search.brave.com/res/v1/web/search"
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _VALID_MODES = {"fresh", "static"}
+_VALID_RESEARCH_DEPTHS = {"quick", "deep"}
 _SQLITE_TIME_FMT = "%Y-%m-%d %H:%M:%S"
 TIME_SENSITIVE_KEYWORDS = {
     "today",
@@ -60,6 +62,14 @@ TIME_SENSITIVE_KEYWORDS = {
     "december",
 }
 _LAST_VOLUME_CLEANUP_DATE: str | None = None
+_TRUSTED_DOMAIN_HINTS = (
+    "docs.",
+    ".gov",
+    ".edu",
+    "wikipedia.org",
+    "github.com",
+    "developer.",
+)
 
 @dataclass
 class WebCapabilityError(Exception):
@@ -322,6 +332,176 @@ async def brave_search(
         config_manager=config_manager,
     )
     return response
+
+
+def _extract_domain(url: str) -> str:
+    try:
+        return (urlparse(url).netloc or "").lower()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _score_result(item: dict[str, str], query_tokens: set[str]) -> int:
+    title = (item.get("title") or "").lower()
+    url = (item.get("url") or "").lower()
+    domain = _extract_domain(url)
+    score = 0
+    if any(hint in domain for hint in _TRUSTED_DOMAIN_HINTS):
+        score += 3
+    if url.startswith("https://"):
+        score += 1
+    if query_tokens and any(token in title for token in query_tokens):
+        score += 1
+    return score
+
+
+def _normalize_whitespace(value: str) -> str:
+    return " ".join(value.split())
+
+
+async def _fetch_page_excerpt(
+    url: str,
+    timeout_seconds: int = 8,
+    max_chars: int = 2500,
+) -> dict[str, Any]:
+    headers = {
+        "User-Agent": "SohnBot/0.1 (+https://github.com/)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            async with asyncio.timeout(timeout_seconds):
+                response = await client.get(url, headers=headers)
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        return {
+            "url": url,
+            "success": False,
+            "error": f"timeout after {timeout_seconds}s",
+            "retryable": True,
+            "details": str(exc),
+        }
+    except httpx.RequestError as exc:
+        return {
+            "url": url,
+            "success": False,
+            "error": "network error during fetch",
+            "retryable": True,
+            "details": str(exc),
+        }
+
+    if response.status_code >= 400:
+        return {
+            "url": url,
+            "success": False,
+            "error": f"http {response.status_code}",
+            "retryable": response.status_code >= 500,
+            "status_code": response.status_code,
+        }
+
+    html = response.text or ""
+    # Keep sanitization simple and deterministic: strip script/style blocks and tags.
+    stripped = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", html)
+    stripped = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", stripped)
+    stripped = _strip_html(stripped)
+    excerpt = _normalize_whitespace(stripped)[:max_chars]
+    return {
+        "url": url,
+        "final_url": str(response.url),
+        "status_code": response.status_code,
+        "success": True,
+        "excerpt": excerpt,
+        "char_count": len(excerpt),
+    }
+
+
+async def hybrid_web_research(
+    query: str,
+    depth: Literal["quick", "deep"] = "quick",
+    mode: Literal["fresh", "static"] = "fresh",
+    config_manager: "ConfigManager | None" = None,
+) -> dict[str, Any]:
+    """Run discovery-first web research with selective page fetches."""
+    normalized_depth = (depth or "quick").strip().lower()
+    if normalized_depth not in _VALID_RESEARCH_DEPTHS:
+        raise WebCapabilityError(
+            code="invalid_depth",
+            message="depth must be 'quick' or 'deep'",
+            details={"depth": depth},
+            retryable=False,
+        )
+
+    search_result = await brave_search(
+        query=query,
+        mode=mode,
+        max_results=5,
+        config_manager=config_manager,
+    )
+    search_items = list(search_result.get("results", []))
+    if not search_items:
+        return {
+            "query": search_result.get("query", query),
+            "mode": search_result.get("mode", mode),
+            "effective_mode": search_result.get("effective_mode", mode),
+            "depth": normalized_depth,
+            "search": search_result,
+            "fetched": [],
+            "summary": "No results found.",
+        }
+
+    max_fetches = 2 if normalized_depth == "quick" else 3
+    query_tokens = {token for token in re.findall(r"[a-z0-9]{3,}", query.lower())}
+    ranked = sorted(
+        search_items,
+        key=lambda item: _score_result(item, query_tokens),
+        reverse=True,
+    )
+
+    selected: list[dict[str, str]] = []
+    seen_domains: set[str] = set()
+    for item in ranked:
+        url = item.get("url", "")
+        domain = _extract_domain(url)
+        if domain and domain in seen_domains:
+            continue
+        if domain:
+            seen_domains.add(domain)
+        selected.append(item)
+        if len(selected) >= max_fetches:
+            break
+
+    fetched_raw = await asyncio.gather(
+        *[_fetch_page_excerpt(item.get("url", "")) for item in selected],
+    )
+
+    fetched: list[dict[str, Any]] = []
+    summary_lines: list[str] = []
+    for source, fetched_item in zip(selected, fetched_raw, strict=False):
+        combined = {
+            "title": source.get("title", ""),
+            "source_snippet": source.get("snippet", ""),
+            **fetched_item,
+        }
+        fetched.append(combined)
+        if fetched_item.get("success"):
+            excerpt = str(fetched_item.get("excerpt", "")).strip()
+            if excerpt:
+                summary_lines.append(f"- {source.get('title', source.get('url', 'Source'))}: {excerpt[:260]}")
+        else:
+            summary_lines.append(
+                f"- {source.get('title', source.get('url', 'Source'))}: fetch failed ({fetched_item.get('error')})"
+            )
+
+    summary = "\n".join(summary_lines[:max_fetches]) if summary_lines else "No fetched content available."
+    return {
+        "query": search_result.get("query", query),
+        "mode": search_result.get("mode", mode),
+        "effective_mode": search_result.get("effective_mode", mode),
+        "depth": normalized_depth,
+        "search": search_result,
+        "fetched": fetched,
+        "summary": summary,
+    }
 
 
 def get_query_hash(query: str, mode: str) -> str:

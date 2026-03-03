@@ -16,6 +16,7 @@ from src.sohnbot.capabilities.web import (
     brave_search,
     cleanup_expired_cache,
     get_query_hash,
+    hybrid_web_research,
     is_time_sensitive,
 )
 from src.sohnbot.persistence.db import DatabaseManager, set_db_manager
@@ -623,3 +624,35 @@ async def test_brave_search_volume_alert_skip_when_claim_not_acquired(web_db):
                         )
     mock_claim.assert_awaited_once_with(threshold=3)
     mock_enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hybrid_web_research_quick_fetches_two_sources():
+    search_result = {
+        "query": "python asyncio",
+        "mode": "fresh",
+        "effective_mode": "fresh",
+        "results": [
+            {"title": "Python docs", "url": "https://docs.python.org/3/library/asyncio.html", "snippet": "docs"},
+            {"title": "Wikipedia", "url": "https://wikipedia.org/wiki/Async/await", "snippet": "wiki"},
+            {"title": "Blog", "url": "https://example.com/blog", "snippet": "blog"},
+        ],
+    }
+
+    with (
+        patch("src.sohnbot.capabilities.web.brave_search", new=AsyncMock(return_value=search_result)),
+        patch(
+            "src.sohnbot.capabilities.web._fetch_page_excerpt",
+            new=AsyncMock(return_value={"success": True, "excerpt": "content", "url": "https://example.com"}),
+        ),
+    ):
+        result = await hybrid_web_research(query="python asyncio", depth="quick", mode="fresh")
+
+    assert result["depth"] == "quick"
+    assert len(result["fetched"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_hybrid_web_research_rejects_invalid_depth():
+    with pytest.raises(WebCapabilityError, match="depth must be 'quick' or 'deep'"):
+        await hybrid_web_research(query="python asyncio", depth="invalid", mode="fresh")

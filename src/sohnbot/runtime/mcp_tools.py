@@ -844,6 +844,58 @@ def create_sohnbot_mcp_server(broker, config):
             lines.append(f"{idx}. {title}\n{url}\n{snippet}")
         return _as_mcp_text("\n\n".join(lines))
 
+    @tool("web__research", "Hybrid web research (search then selective fetch)", {"query": str, "depth": str, "mode": str})
+    async def web_research(args):
+        """Run hybrid web research via broker."""
+        ctx = get_contextvars()
+        chat_id = ctx.get("chat_id", "unknown")
+        query = args.get("query")
+        depth = args.get("depth", "quick")
+        mode = args.get("mode", "fresh")
+        logger.info(
+            "mcp_tool_invoked",
+            tool="web__research",
+            chat_id=chat_id,
+            depth=depth,
+            mode=mode,
+            query_length=len(query or ""),
+        )
+
+        result = await broker.route_operation(
+            capability="web",
+            action="research",
+            params={"query": query, "depth": depth, "mode": mode},
+            chat_id=chat_id,
+        )
+        if not result.allowed:
+            error_msg = (result.error or {}).get("message", "Operation denied")
+            logger.warning("mcp_tool_denied", tool="web__research", error=error_msg)
+            return _as_mcp_text(f"❌ Web research denied: {error_msg}")
+
+        data = result.result or {}
+        search_data = data.get("search", {})
+        search_results = search_data.get("results", [])
+        fetched = data.get("fetched", [])
+        lines = [
+            f"Web research for: {data.get('query', query)}",
+            f"Depth: {data.get('depth', depth)} | Mode: {data.get('mode', mode)}",
+            f"Search results considered: {len(search_results)} | Fetched pages: {len(fetched)}",
+        ]
+        summary = str(data.get("summary", "")).strip()
+        if summary:
+            lines.extend(["", "Summary:", summary])
+        if fetched:
+            lines.append("")
+            lines.append("Fetched sources:")
+            for idx, item in enumerate(fetched, start=1):
+                title = item.get("title") or item.get("url") or f"Source {idx}"
+                if item.get("success"):
+                    excerpt = str(item.get("excerpt", "")).strip()
+                    lines.append(f"{idx}. {title}\n{item.get('url', '')}\n{excerpt[:500]}")
+                else:
+                    lines.append(f"{idx}. {title}\n{item.get('url', '')}\nFetch failed: {item.get('error', 'unknown')}")
+        return _as_mcp_text("\n".join(lines))
+
     @tool(
         "ai__delegate_to_gemini",
         "Delegate complex reasoning to Gemini Pro (saves Claude quota)",
@@ -1115,6 +1167,7 @@ def create_sohnbot_mcp_server(broker, config):
             profiles_test,
             profiles_ripgrep,
             web_search,
+            web_research,
             ai_delegate_to_gemini,
             observe_status,
             observe_resources,

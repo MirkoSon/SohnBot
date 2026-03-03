@@ -106,6 +106,18 @@ async def initialize_operation_logs_cleanup_job() -> None:
         logger.error("operation_logs_cleanup_initialization_failed", error=str(exc), exc_info=True)
 
 
+async def _run_startup_step(step_name: str, coro, timeout_seconds: int = 20) -> None:
+    """Run a startup step with explicit progress logs and timeout protection."""
+    logger.info("startup_step_begin", step=step_name, timeout_seconds=timeout_seconds)
+    try:
+        await asyncio.wait_for(coro, timeout=timeout_seconds)
+        logger.info("startup_step_done", step=step_name)
+    except asyncio.TimeoutError:
+        logger.error("startup_step_timeout", step=step_name, timeout_seconds=timeout_seconds)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("startup_step_failed", step=step_name, error=str(exc), exc_info=True)
+
+
 async def load_dynamic_config() -> None:
     """Load persisted dynamic config from DB, overlaying DB values onto TOML defaults."""
     try:
@@ -228,8 +240,11 @@ async def run_main() -> None:
         )
 
         # Initialize default jobs
-        await initialize_heartbeat_job()
-        await initialize_operation_logs_cleanup_job()
+        await _run_startup_step("initialize_heartbeat_job", initialize_heartbeat_job())
+        await _run_startup_step(
+            "initialize_operation_logs_cleanup_job",
+            initialize_operation_logs_cleanup_job(),
+        )
 
         # Start HTTP observability server if enabled
         http_enabled = bool(config.get("observability.http_enabled"))

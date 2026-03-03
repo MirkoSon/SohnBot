@@ -22,8 +22,6 @@ from .postponement_manager import PostponementManager
 logger = structlog.get_logger(__name__)
 
 SendMessageFn = Callable[[int, str], Awaitable[bool]]
-
-
 class AgentSession:
     """Wrapper for Claude Agent SDK with SohnBot-specific configuration."""
 
@@ -89,6 +87,16 @@ class AgentSession:
                 )
                 logger.info("gemini_mcp_server_configured", path=gemini_mcp_path)
 
+        claude_project_root = (os.getenv("SOHNBOT_CLAUDE_PROJECT_ROOT") or "").strip()
+        if claude_project_root:
+            setting_sources = ["project", "local"]
+            session_cwd = claude_project_root
+            logger.info("claude_project_settings_enabled", claude_project_root=claude_project_root)
+        else:
+            setting_sources = []
+            session_cwd = str(Path.cwd())
+            logger.info("claude_project_settings_disabled")
+
         # Build options
         options = ClaudeAgentOptions(
             model=model,
@@ -119,17 +127,24 @@ class AgentSession:
                 "mcp__sohnbot__profiles__test",
                 "mcp__sohnbot__profiles__ripgrep",
                 "mcp__sohnbot__web__search",
+                "mcp__sohnbot__web__research",
                 "mcp__sohnbot__ai__delegate_to_gemini",
                 "mcp__sohnbot__observe__status",
                 "mcp__sohnbot__observe__resources",
                 "mcp__sohnbot__observe__health",
                 "mcp__sohnbot__observe__logs",
+                "WebSearch",
+                "WebFetch",
+                "Read",
+                "Write",
+                "Edit",
             ],
             hooks={
                 "PreToolUse": [validate_tool_use]
             },
-            setting_sources=["project"],  # Load CLAUDE.md
-            cwd=str(Path.cwd())
+            # Enable CLAUDE.md/.claude skills only when a dedicated project root is configured.
+            setting_sources=setting_sources,
+            cwd=session_cwd,
         )
 
         # Initialize client

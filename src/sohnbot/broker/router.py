@@ -27,7 +27,7 @@ from ..capabilities.scheduler import (
     get_job_by_name,
     list_jobs,
 )
-from ..capabilities.web import WebCapabilityError, brave_search
+from ..capabilities.web import WebCapabilityError, brave_search, hybrid_web_research
 from .operation_classifier import classify_tier
 from .scope_validator import ScopeValidator
 from ..persistence.audit import log_operation_start, log_operation_end
@@ -625,7 +625,7 @@ class BrokerRouter:
                         )
 
         if capability == "web":
-            if action != "search":
+            if action not in {"search", "research"}:
                 await self._remove_operation_start_time(operation_id)
                 return BrokerResult(
                     allowed=False,
@@ -684,6 +684,22 @@ class BrokerRouter:
 
             params["query"] = query.strip()
             params["mode"] = mode
+            if action == "research":
+                depth = params.get("depth", "quick")
+                if not isinstance(depth, str) or depth.strip().lower() not in {"quick", "deep"}:
+                    await self._remove_operation_start_time(operation_id)
+                    return BrokerResult(
+                        allowed=False,
+                        operation_id=operation_id,
+                        tier=tier,
+                        error={
+                            "code": "invalid_request",
+                            "message": "depth must be 'quick' or 'deep'",
+                            "details": {"depth": depth},
+                            "retryable": False,
+                        },
+                    )
+                params["depth"] = depth.strip().lower()
 
         if capability == "observe":
             if action != "logs":
@@ -1223,6 +1239,13 @@ class BrokerRouter:
                     mode=params.get("mode", "fresh"),
                     config_manager=self.config_manager,
                 )
+            if action == "research":
+                return await hybrid_web_research(
+                    query=params["query"],
+                    depth=params.get("depth", "quick"),
+                    mode=params.get("mode", "fresh"),
+                    config_manager=self.config_manager,
+                )
 
         if capability == "observe":
             if action == "logs":
@@ -1471,6 +1494,12 @@ class BrokerRouter:
             total_results = data.get("total_results", 0)
             mode = data.get("mode", params.get("mode", "fresh"))
             return f"✅ Web search | mode={mode} | results={total_results}"
+        if capability == "web" and action == "research" and status == "completed":
+            data = result or {}
+            depth = data.get("depth", params.get("depth", "quick"))
+            mode = data.get("mode", params.get("mode", "fresh"))
+            fetched_count = len(data.get("fetched", [])) if isinstance(data.get("fetched"), list) else 0
+            return f"✅ Web research | depth={depth} | mode={mode} | fetched={fetched_count}"
 
         if capability == "git" and action == "commit" and status == "completed":
             data = result or {}

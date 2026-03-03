@@ -35,6 +35,91 @@ def set_schedule_broker(broker: Any) -> None:
     _schedule_broker = broker
 
 
+async def handle_web_research_command(chat_id: str, command_text: str) -> str:
+    """Handle /web_research <query> [--depth=quick|deep] [--mode=fresh|static]."""
+    if _schedule_broker is None:
+        return "Web research unavailable: broker not initialized."
+
+    usage = (
+        "Usage: /web_research <query> [--depth=quick|deep] [--mode=fresh|static]\n"
+        "Example: /web_research \"best React patterns 2026\" --depth=deep --mode=fresh"
+    )
+
+    try:
+        parts = shlex.split(command_text.strip())
+    except ValueError:
+        return usage
+
+    if len(parts) < 2:
+        return usage
+
+    depth = "quick"
+    mode = "fresh"
+    query_parts: list[str] = []
+    i = 1
+    while i < len(parts):
+        token = parts[i]
+        if token.startswith("--depth="):
+            depth = token.split("=", 1)[1].strip().lower()
+        elif token == "--depth" and i + 1 < len(parts):
+            depth = parts[i + 1].strip().lower()
+            i += 1
+        elif token.startswith("--mode="):
+            mode = token.split("=", 1)[1].strip().lower()
+        elif token == "--mode" and i + 1 < len(parts):
+            mode = parts[i + 1].strip().lower()
+            i += 1
+        else:
+            query_parts.append(token)
+        i += 1
+
+    query = " ".join(query_parts).strip()
+    if not query:
+        return usage
+    if depth not in {"quick", "deep"}:
+        return "Invalid depth. Use --depth=quick or --depth=deep"
+    if mode not in {"fresh", "static"}:
+        return "Invalid mode. Use --mode=fresh or --mode=static"
+
+    result = await _schedule_broker.route_operation(
+        capability="web",
+        action="research",
+        params={"query": query, "depth": depth, "mode": mode},
+        chat_id=chat_id,
+    )
+    if not result.allowed:
+        message = (result.error or {}).get("message", "Operation denied")
+        return f"❌ Web research failed: {message}"
+
+    data = result.result or {}
+    search_data = data.get("search", {})
+    search_items = search_data.get("results", [])
+    fetched_items = data.get("fetched", [])
+    lines = [
+        f"🔎 Web Research: {data.get('query', query)}",
+        f"Mode: {data.get('mode', mode)} | Depth: {data.get('depth', depth)}",
+        f"Search results: {len(search_items)} | Fetched pages: {len(fetched_items)}",
+    ]
+    summary = str(data.get("summary", "")).strip()
+    if summary:
+        lines.extend(["", "Summary:", summary])
+
+    if fetched_items:
+        lines.extend(["", "Sources:"])
+        for idx, item in enumerate(fetched_items[:3], start=1):
+            title = item.get("title") or item.get("url") or f"Source {idx}"
+            lines.append(f"{idx}. {title}")
+            lines.append(str(item.get("url", "")))
+            if item.get("success"):
+                excerpt = str(item.get("excerpt", "")).strip()
+                if excerpt:
+                    lines.append(excerpt[:240])
+            else:
+                lines.append(f"Fetch failed: {item.get('error', 'unknown')}")
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
 async def handle_notify_command(chat_id: str, command_text: str) -> str:
     """Handle /notify on|off|status command."""
     parts = command_text.strip().split()
@@ -697,6 +782,10 @@ async def handle_help_command() -> str:
 • `/heartbeat enable` - Enable daily health report
 • `/heartbeat disable` - Disable daily report
 • `/heartbeat status` - Check heartbeat status
+
+**Web Research:**
+• `/web_research <query> [--depth=quick|deep] [--mode=fresh|static]`
+  Example: `/web_research "weather in Helsinki" --depth=quick`
 
 **Natural Language:**
 You can also ask me to do things naturally:

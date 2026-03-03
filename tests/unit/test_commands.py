@@ -22,6 +22,7 @@ from src.sohnbot.gateway.commands import (
     handle_notify_command,
     handle_schedule_command,
     handle_status_command,
+    handle_web_research_command,
     set_schedule_broker,
 )
 from src.sohnbot.capabilities.scheduler import create_job
@@ -379,6 +380,50 @@ async def test_schedule_command_not_found_errors():
     assert "Job not found" in await handle_schedule_command("123", "/schedule enable missing")
     assert "Job not found" in await handle_schedule_command("123", "/schedule delete missing")
     assert "Job not found" in await handle_schedule_command("123", '/schedule edit missing cron_expr "0 1 * * *"')
+
+
+@pytest.mark.asyncio
+async def test_web_research_command_success():
+    class _Broker:
+        async def route_operation(self, capability, action, params, chat_id):
+            class _Result:
+                allowed = True
+                result = {
+                    "query": params["query"],
+                    "mode": params["mode"],
+                    "depth": params["depth"],
+                    "search": {
+                        "results": [
+                            {"title": "Example", "url": "https://example.com", "snippet": "example"}
+                        ]
+                    },
+                    "fetched": [
+                        {"title": "Example", "url": "https://example.com", "success": True, "excerpt": "Details"}
+                    ],
+                    "summary": "- Example: Details",
+                }
+
+            return _Result()
+
+    set_schedule_broker(_Broker())
+    response = await handle_web_research_command(
+        "123",
+        '/web_research "python asyncio" --depth=quick --mode=fresh',
+    )
+    assert "Web Research" in response
+    assert "python asyncio" in response
+    assert "Fetched pages: 1" in response
+
+
+@pytest.mark.asyncio
+async def test_web_research_command_invalid_depth():
+    class _Broker:
+        async def route_operation(self, capability, action, params, chat_id):
+            raise AssertionError("Should not route for invalid depth")
+
+    set_schedule_broker(_Broker())
+    response = await handle_web_research_command("123", '/web_research "python" --depth=medium')
+    assert "Invalid depth" in response
 
 
 @pytest.mark.asyncio

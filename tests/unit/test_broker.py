@@ -108,6 +108,7 @@ def test_classify_tier_0_read_operations():
     assert classify_tier("scheduler", "list", 0) == 0
     assert classify_tier("observe", "logs", 0) == 0
     assert classify_tier("web", "search", 0) == 0
+    assert classify_tier("web", "research", 0) == 0
     assert classify_tier("profiles", "lint", 0) == 0
     assert classify_tier("profiles", "build", 0) == 0
     assert classify_tier("profiles", "ripgrep", 0) == 0
@@ -1232,3 +1233,64 @@ async def test_web_search_invalid_mode_returns_invalid_request(mock_log_end, moc
     assert result.allowed is False
     assert result.error["code"] == "invalid_request"
     assert "mode" in result.error["message"]
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_web_research_success_routes_to_capability(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    fake_result = {
+        "query": "python asyncio",
+        "mode": "fresh",
+        "depth": "quick",
+        "search": {"results": [{"title": "Result", "url": "https://example.com"}]},
+        "fetched": [{"title": "Result", "url": "https://example.com", "success": True, "excerpt": "..." }],
+        "summary": "- Result: ...",
+    }
+
+    with patch(
+        "src.sohnbot.broker.router.hybrid_web_research",
+        new=AsyncMock(return_value=fake_result),
+    ) as mock_research:
+        result = await router.route_operation(
+            capability="web",
+            action="research",
+            params={"query": "python asyncio", "depth": "quick", "mode": "fresh"},
+            chat_id="chat-web",
+        )
+
+    mock_research.assert_awaited_once_with(
+        query="python asyncio",
+        depth="quick",
+        mode="fresh",
+        config_manager=None,
+    )
+    assert result.allowed is True
+    assert result.tier == 0
+    assert result.result["depth"] == "quick"
+
+
+@pytest.mark.asyncio
+@patch("src.sohnbot.broker.router.log_operation_start", new_callable=AsyncMock)
+@patch("src.sohnbot.broker.router.log_operation_end", new_callable=AsyncMock)
+async def test_web_research_invalid_depth_returns_invalid_request(mock_log_end, mock_log_start, tmp_path):
+    allowed_root = tmp_path / "projects"
+    allowed_root.mkdir()
+    validator = ScopeValidator([str(allowed_root)])
+    router = BrokerRouter(validator)
+
+    result = await router.route_operation(
+        capability="web",
+        action="research",
+        params={"query": "python", "depth": "medium"},
+        chat_id="chat-web",
+    )
+
+    assert result.allowed is False
+    assert result.error["code"] == "invalid_request"
+    assert "depth" in result.error["message"]

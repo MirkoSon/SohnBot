@@ -10,7 +10,7 @@ from uuid import uuid4
 import structlog
 from structlog.contextvars import bind_contextvars, unbind_contextvars
 from telegram import Update
-from telegram.error import BadRequest
+from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 from .commands import (
@@ -23,6 +23,7 @@ from .commands import (
     handle_notify_command,
     handle_schedule_command,
     handle_status_command,
+    handle_web_research_command,
     set_schedule_broker,
 )
 from .formatters import format_for_telegram
@@ -92,6 +93,8 @@ class TelegramClient:
         self.application.add_handler(CommandHandler("heartbeat", self.cmd_heartbeat))
         self.application.add_handler(CommandHandler("config", self.cmd_config))
         self.application.add_handler(CommandHandler("dryrun", self.cmd_dryrun))
+        self.application.add_handler(CommandHandler("web_research", self.cmd_web_research))
+        self.application.add_handler(CommandHandler("webresearch", self.cmd_web_research))
 
         # Start polling
         await self.application.initialize()
@@ -156,11 +159,24 @@ class TelegramClient:
         )
 
         correlation_id = str(uuid4())
-        ack_msg = None
-        ack_finalized = False
+        typing_stop = asyncio.Event()
+        typing_task: asyncio.Task | None = None
         try:
             bind_contextvars(correlation_id=correlation_id)
-            ack_msg = await update.message.reply_text("Processing...")
+
+            async def _typing_loop() -> None:
+                while not typing_stop.is_set():
+                    try:
+                        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+                    except Exception:  # noqa: BLE001
+                        # Typing indicator is best-effort only.
+                        return
+                    try:
+                        await asyncio.wait_for(typing_stop.wait(), timeout=4)
+                    except asyncio.TimeoutError:
+                        continue
+
+            typing_task = asyncio.create_task(_typing_loop(), name=f"typing-{chat_id}")
 
             # Route to Claude Agent SDK runtime
             response = await self.message_router.route_to_runtime(
@@ -171,21 +187,8 @@ class TelegramClient:
             )
 
             if not response.strip():
-                if ack_msg is not None:
-                    try:
-                        await ack_msg.delete()
-                        ack_finalized = True
-                    except BadRequest:
-                        pass
                 logger.info("telegram_response_suppressed", chat_id=chat_id)
                 return
-
-            if ack_msg is not None:
-                try:
-                    await ack_msg.delete()
-                    ack_finalized = True
-                except BadRequest:
-                    pass
 
             # Format and send response (handle 4096-char limit)
             formatted_messages = format_for_telegram(response)
@@ -206,20 +209,14 @@ class TelegramClient:
                 error=str(e),
                 error_type=type(e).__name__
             )
-            if ack_msg is not None:
-                try:
-                    await ack_msg.edit_text("❌ An error occurred processing your request.")
-                    ack_finalized = True
-                    return
-                except BadRequest:
-                    pass
             await update.message.reply_text("❌ An error occurred processing your request.")
         finally:
             unbind_contextvars("correlation_id")
-            if ack_msg is not None and not ack_finalized:
+            typing_stop.set()
+            if typing_task is not None:
                 try:
-                    await ack_msg.delete()
-                except BadRequest:
+                    await typing_task
+                except Exception:  # noqa: BLE001
                     pass
 
     async def cmd_start(self, update: Update, context):
@@ -383,6 +380,19 @@ class TelegramClient:
             return
 
         response = await handle_config_command(str(chat_id), update.message.text or "")
+        await update.message.reply_text(response)
+
+    async def cmd_web_research(self, update: Update, context):
+        """Handle /web_research command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_web_research_command", chat_id=chat_id)
+            return
+
+        response = await handle_web_research_command(str(chat_id), update.message.text or "")
         await update.message.reply_text(response)
 
     async def cmd_dryrun(self, update: Update, context):

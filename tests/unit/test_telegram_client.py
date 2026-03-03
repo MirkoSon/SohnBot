@@ -263,6 +263,10 @@ class TestTelegramClient:
             getattr(call.args[0], "commands", frozenset()) == frozenset({"config"})
             for call in app.add_handler.call_args_list
         )
+        assert any(
+            getattr(call.args[0], "commands", frozenset()) == frozenset({"web_research"})
+            for call in app.add_handler.call_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_stop_stops_notification_worker(self, message_router):
@@ -549,6 +553,50 @@ class TestTelegramClient:
             await client.cmd_config(update, None)
 
         config_handler.assert_not_awaited()
+        update.message.reply_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cmd_web_research_authorized(self, message_router):
+        """Authorized /web_research command should reply with research text."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 123456789
+        update.message.text = '/web_research "python asyncio" --depth=quick'
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_web_research_command",
+            new=AsyncMock(return_value="🔎 Web Research"),
+        ) as web_research_handler:
+            await client.cmd_web_research(update, None)
+
+        web_research_handler.assert_awaited_once_with("123456789", '/web_research "python asyncio" --depth=quick')
+        update.message.reply_text.assert_awaited_once_with("🔎 Web Research")
+
+    @pytest.mark.asyncio
+    async def test_cmd_web_research_unauthorized(self, message_router):
+        """Unauthorized /web_research command should be ignored."""
+        client = TelegramClient(
+            token="test_token",
+            allowed_chat_ids=[123456789],
+            message_router=message_router,
+        )
+        update = AsyncMock()
+        update.effective_chat.id = 111111111
+        update.message.text = '/web_research "python asyncio" --depth=quick'
+        update.message.reply_text = AsyncMock()
+
+        with patch(
+            "src.sohnbot.gateway.telegram_client.handle_web_research_command",
+            new=AsyncMock(return_value="ignored"),
+        ) as web_research_handler:
+            await client.cmd_web_research(update, None)
+
+        web_research_handler.assert_not_awaited()
         update.message.reply_text.assert_not_called()
 
     @pytest.mark.asyncio

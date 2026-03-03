@@ -271,6 +271,20 @@ class TestMCPTools:
         assert "web__search" in by_name
         assert by_name["web__search"].input_schema == {"query": str, "mode": str}
 
+    def test_web_research_tool_registered_with_expected_schema(self, mock_broker, mock_config):
+        """web__research tool is registered with correct schema."""
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+
+        assert "web__research" in by_name
+        assert by_name["web__research"].input_schema == {"query": str, "depth": str, "mode": str}
+
     def test_observe_logs_tool_registered_with_expected_schema(self, mock_broker, mock_config):
         """observe__logs tool is registered with correct schema."""
         with patch(
@@ -553,6 +567,45 @@ class TestMCPTools:
         assert "❌ Web search denied" in content
         assert "not configured" in content
 
+    @pytest.mark.asyncio
+    async def test_web_research_routes_through_broker(self, mock_broker, mock_config):
+        """web__research invokes broker.route_operation with correct params."""
+        mock_broker.route_operation.return_value = MagicMock(
+            allowed=True,
+            error=None,
+            result={
+                "query": "python asyncio",
+                "depth": "quick",
+                "mode": "fresh",
+                "search": {"results": [{"title": "AsyncIO Docs", "url": "https://docs.python.org/3/library/asyncio.html"}]},
+                "fetched": [{"title": "AsyncIO Docs", "url": "https://docs.python.org/3/library/asyncio.html", "success": True, "excerpt": "..." }],
+                "summary": "- AsyncIO Docs: ...",
+            },
+        )
+
+        with patch(
+            "src.sohnbot.runtime.mcp_tools.create_sdk_mcp_server",
+            return_value={"type": "inprocess", "name": "sohnbot", "instance": MagicMock()},
+        ) as mock_create_server:
+            create_sohnbot_mcp_server(broker=mock_broker, config=mock_config)
+
+        tools = mock_create_server.call_args.kwargs["tools"]
+        by_name = {tool.name: tool for tool in tools}
+        web_tool = by_name["web__research"]
+
+        with patch("src.sohnbot.runtime.mcp_tools.get_contextvars", return_value={"chat_id": "test_chat"}):
+            result = await web_tool.handler({"query": "python asyncio", "depth": "quick", "mode": "fresh"})
+
+        mock_broker.route_operation.assert_called_once_with(
+            capability="web",
+            action="research",
+            params={"query": "python asyncio", "depth": "quick", "mode": "fresh"},
+            chat_id="test_chat",
+        )
+        content = result["content"][0]["text"]
+        assert "Web research for:" in content
+        assert "Fetched pages: 1" in content
+
 
 class TestPreToolUseHook:
     """Test PreToolUse hook validation."""
@@ -568,7 +621,7 @@ class TestPreToolUseHook:
 
     @pytest.mark.asyncio
     async def test_validate_tool_use_blocks_other_tools(self):
-        """Non-sohnbot tools blocked."""
+        """Unapproved tools blocked."""
         input_data = {"tool_name": "some_other_tool"}
         result = await validate_tool_use(input_data, "test_id", {})
 
@@ -577,12 +630,29 @@ class TestPreToolUseHook:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     @pytest.mark.asyncio
-    async def test_validate_tool_use_blocks_read_tool(self):
-        """Built-in Read tool blocked."""
-        input_data = {"tool_name": "Read"}
-        result = await validate_tool_use(input_data, "test_id", {})
+    async def test_validate_tool_use_allows_non_sohnbot_mcp_in_settings_mode(self):
+        """settings mode allows external MCP tools."""
+        input_data = {"tool_name": "mcp__statho__ping"}
+        with patch.dict("os.environ", {"SOHNBOT_MCP_POLICY_MODE": "settings"}):
+            result = await validate_tool_use(input_data, "test_id", {})
+        assert result == {}
 
-        # Should block
+    @pytest.mark.asyncio
+    async def test_validate_tool_use_allows_read_tool_within_root(self):
+        """Built-in Read tool allowed when path is inside native RW root."""
+        input_data = {"tool_name": "Read", "tool_input": {"file_path": "/tmp/sohnbot-instructions/CLAUDE.md"}}
+        with patch.dict("os.environ", {"SOHNBOT_NATIVE_RW_ROOT": "/tmp/sohnbot-instructions"}):
+            result = await validate_tool_use(input_data, "test_id", {})
+
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_validate_tool_use_blocks_read_tool_outside_root(self):
+        """Built-in Read tool blocked when path is outside native RW root."""
+        input_data = {"tool_name": "Read", "tool_input": {"file_path": "/etc/passwd"}}
+        with patch.dict("os.environ", {"SOHNBOT_NATIVE_RW_ROOT": "/tmp/sohnbot-instructions"}):
+            result = await validate_tool_use(input_data, "test_id", {})
+
         assert "hookSpecificOutput" in result
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -595,6 +665,22 @@ class TestPreToolUseHook:
         # Should block
         assert "hookSpecificOutput" in result
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    @pytest.mark.asyncio
+    async def test_validate_tool_use_allows_webfetch_tool(self):
+        """Approved native WebFetch tool allowed."""
+        input_data = {"tool_name": "WebFetch"}
+        result = await validate_tool_use(input_data, "test_id", {})
+
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_validate_tool_use_allows_websearch_tool(self):
+        """Approved native WebSearch tool allowed."""
+        input_data = {"tool_name": "WebSearch"}
+        result = await validate_tool_use(input_data, "test_id", {})
+
+        assert result == {}
 
     @pytest.mark.asyncio
     @patch('src.sohnbot.runtime.hooks.logger')
@@ -638,6 +724,12 @@ class TestPreToolUseHook:
             "mcp__sohnbot__profiles__test",
             "mcp__sohnbot__profiles__ripgrep",
             "mcp__sohnbot__web__search",
+            "mcp__sohnbot__web__research",
+            "WebSearch",
+            "WebFetch",
+            "Read",
+            "Write",
+            "Edit",
         ]
 
         for tool_name in tool_names:
