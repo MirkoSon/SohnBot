@@ -13,6 +13,75 @@ SohnBot is your personal autonomous agent that can:
 - 📝 Execute git operations
 - 🛡️ All operations are policy-enforced for safety
 
+## Setup & Installation
+
+Before you can use SohnBot, you need to set it up. See the main [README.md](../README.md) for detailed installation instructions. Here's a quick summary:
+
+### Prerequisites
+
+- Python 3.13+
+- Poetry (Python package manager)
+- Git 2.x+ (must be in PATH)
+- ripgrep (`rg`) (must be in PATH)
+- Telegram Bot Token (from @BotFather)
+- **Claude Authentication** (choose one):
+  - **OAuth Token** (recommended for Claude Pro/Max users) - get via `claude setup-token`
+  - **Anthropic API Key** (pay-per-use) - get from https://console.anthropic.com/
+
+### Quick Setup
+
+1. **Install dependencies:**
+   ```bash
+   poetry install
+   ```
+
+2. **Get Claude Authentication:**
+
+   **Option A: OAuth Token (Recommended for Claude Pro/Max users)**
+   ```bash
+   # Install Claude CLI (if not already installed)
+   npm install -g @anthropic-ai/claude-code
+
+   # Generate OAuth token
+   claude setup-token
+
+   # Copy the token it outputs
+   ```
+
+   **Option B: Anthropic API Key (Pay-per-use)**
+   - Visit https://console.anthropic.com/
+   - Create an API key
+   - Copy it
+
+3. **Configure environment:**
+   ```bash
+   cp .env.example .env
+   # Edit .env and add EITHER:
+   #   CLAUDE_CODE_OAUTH_TOKEN=your_oauth_token  (Option A)
+   #   OR
+   #   ANTHROPIC_API_KEY=your_api_key  (Option B)
+   # Also add your TELEGRAM_BOT_TOKEN
+   ```
+
+4. **Get your Telegram Chat ID:**
+   - Message [@userinfobot](https://t.me/userinfobot) on Telegram
+   - Copy the chat ID it sends you
+   - Add it to `.env` as: `SOHNBOT_TELEGRAM_ALLOWED_CHAT_IDS=123456789`
+
+5. **Run database migrations:**
+   ```bash
+   poetry run python scripts/migrate.py
+   ```
+
+6. **Start SohnBot:**
+   ```bash
+   poetry run python -m sohnbot
+   ```
+
+7. **Find your bot on Telegram:**
+   - Search for your bot by username
+   - Send `/start` to begin!
+
 ## Getting Started
 
 ### 1. First Contact
@@ -339,6 +408,51 @@ SohnBot is designed with safety first:
 - Subprocess trees are properly terminated
 
 ---
+
+## Authentication FAQ
+
+### What's the difference between OAuth Token and API Key?
+
+- **OAuth Token**:
+  - For Claude Pro or Claude Max subscribers
+  - Uses your subscription quota (no additional per-use charges)
+  - Get it by running `claude setup-token`
+  - Recommended if you already have a subscription
+
+- **API Key**:
+  - Pay-per-use pricing model
+  - Suitable for developers and enterprises without subscriptions
+  - Get from [Anthropic Console](https://console.anthropic.com/)
+  - Charged based on actual usage
+
+### How do I get an OAuth Token?
+
+```bash
+# 1. Install Claude CLI
+npm install -g @anthropic-ai/claude-code
+
+# 2. Run setup command
+claude setup-token
+
+# 3. Follow the browser authentication flow
+# 4. Copy the token from terminal output
+# 5. Add to .env: CLAUDE_CODE_OAUTH_TOKEN=your_token_here
+```
+
+### Which authentication method should I use?
+
+- **Use OAuth Token if**: You have Claude Pro/Max subscription and want to use your subscription quota
+- **Use API Key if**: You don't have a subscription, or want separate billing for API usage
+
+You only need ONE method - the SDK automatically checks for OAuth token first, then falls back to API key.
+
+### "Invalid API key" or authentication errors?
+
+1. Check that your token/key in `.env` is correctly copied (no extra spaces or line breaks)
+2. If using OAuth Token, try running `claude setup-token` again to get a fresh token
+3. Make sure you uncommented the correct line in `.env` (remove the `#` at the start)
+4. For OAuth: Ensure `@anthropic-ai/claude-code` is installed globally
+5. For API Key: Verify it's active at https://console.anthropic.com/
 
 ## Troubleshooting
 

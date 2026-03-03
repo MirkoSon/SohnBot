@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
 from uuid import uuid4
 
 import structlog
 
+from .broker.router import Broker
+from .broker.scope_validator import ScopeValidator
 from .capabilities.scheduler import create_job, get_job_by_name
 from .config.manager import get_config_manager
 from .capabilities.scheduler.executor import scheduler_executor_loop
+from .gateway.message_router import MessageRouter
+from .gateway.telegram_client import TelegramClient
 from .observability.http_server import http_server_loop
 from .observability.snapshot_collector import snapshot_collector_loop
 from .persistence.notification import enqueue_notification
+from .runtime.agent_session import AgentSession
 
 logger = structlog.get_logger(__name__)
 
@@ -107,13 +113,71 @@ async def load_dynamic_config() -> None:
 
 
 async def run_main() -> None:
-    """Run background runtime tasks for SohnBot."""
+    """Run SohnBot with Telegram gateway and background runtime tasks."""
     config = get_config_manager()
     await load_dynamic_config()
+
+    # Load telegram configuration
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not telegram_token:
+        logger.error("telegram_bot_token_missing", message="TELEGRAM_BOT_TOKEN environment variable not set")
+        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+
+    # Load allowed chat IDs from config
+    try:
+        allowed_chat_ids_str = str(config.get("telegram.allowed_chat_ids"))
+        allowed_chat_ids = [int(cid.strip()) for cid in allowed_chat_ids_str.split(",") if cid.strip()]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram_allowed_chat_ids_parse_failed", error=str(exc))
+        allowed_chat_ids = []
+
+    # Validate Claude authentication
+    has_oauth = bool(os.getenv("CLAUDE_CODE_OAUTH_TOKEN"))
+    has_api_key = bool(os.getenv("ANTHROPIC_API_KEY"))
+    if not (has_oauth or has_api_key):
+        logger.error(
+            "claude_authentication_missing",
+            message="Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY found in environment"
+        )
+        raise ValueError(
+            "Claude authentication required: set either CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env file"
+        )
+
+    # Initialize core components
+    scope_validator = ScopeValidator(config=config)
+    broker = Broker(scope_validator=scope_validator, config=config)
+    agent_session = AgentSession(broker=broker, config=config)
+
+    # Initialize agent session (loads Claude SDK, MCP server, hooks)
+    await agent_session.initialize()
+
+    message_router = MessageRouter(agent_session=agent_session)
+    telegram_client = TelegramClient(
+        token=telegram_token,
+        allowed_chat_ids=allowed_chat_ids,
+        message_router=message_router,
+    )
+
+    # Load background task intervals
     interval = int(config.get("observability.collection_interval_seconds"))
     scheduler_tick = int(config.get("scheduler.tick_seconds"))
 
+    logger.info(
+        "sohnbot_starting",
+        allowed_chat_count=len(allowed_chat_ids),
+        snapshot_interval_seconds=interval,
+        scheduler_tick_seconds=scheduler_tick,
+        auth_method="oauth" if has_oauth else "api_key",
+    )
+
     async with asyncio.TaskGroup() as tg:
+        # Start Telegram gateway
+        tg.create_task(
+            _safe_telegram_gateway(telegram_client),
+            name="telegram-gateway",
+        )
+
+        # Start background tasks
         tg.create_task(
             snapshot_collector_loop(interval_seconds=interval),
             name="snapshot-collector",
@@ -122,9 +186,12 @@ async def run_main() -> None:
             scheduler_executor_loop(tick_seconds=scheduler_tick),
             name="scheduler-executor",
         )
+
+        # Initialize default jobs
         await initialize_heartbeat_job()
         await initialize_operation_logs_cleanup_job()
 
+        # Start HTTP observability server if enabled
         http_enabled = bool(config.get("observability.http_enabled"))
         if http_enabled:
             host = str(config.get("observability.http_host"))
@@ -136,11 +203,54 @@ async def run_main() -> None:
             logger.info("http_observability_task_started", host=host, port=port)
 
         logger.info(
-            "runtime_tasks_started",
-            snapshot_interval_seconds=interval,
-            scheduler_tick_seconds=scheduler_tick,
+            "sohnbot_started",
             http_enabled=http_enabled,
         )
+
+
+async def _safe_telegram_gateway(telegram_client: TelegramClient) -> None:
+    """Run Telegram gateway with resilient restart behavior."""
+    consecutive_failures = 0
+    backoff = 2
+    max_backoff = 60
+
+    while True:
+        try:
+            await telegram_client.start()
+            consecutive_failures = 0
+            backoff = 2
+        except asyncio.CancelledError:
+            await telegram_client.stop()
+            raise
+        except Exception as exc:  # noqa: BLE001
+            consecutive_failures += 1
+            logger.error(
+                "telegram_gateway_crash",
+                error=str(exc),
+                consecutive_failures=consecutive_failures,
+                restart_delay_seconds=backoff,
+                exc_info=True,
+            )
+
+            if consecutive_failures >= 5:
+                try:
+                    await enqueue_notification(
+                        operation_id=f"telegram-gateway-restart-{uuid4()}",
+                        chat_id="system",
+                        message_text=(
+                            "Telegram gateway crashed "
+                            f"{consecutive_failures} times. Last error: {exc}"
+                        ),
+                    )
+                except Exception as notify_exc:  # noqa: BLE001
+                    logger.warning(
+                        "telegram_gateway_crash_notification_failed",
+                        error=str(notify_exc),
+                        consecutive_failures=consecutive_failures,
+                    )
+
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
 
 
 async def _safe_http_server_loop(host: str, port: int) -> None:
