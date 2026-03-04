@@ -128,19 +128,31 @@ class TestAgentSession:
     @patch('src.sohnbot.runtime.agent_session.ClaudeSDKClient')
     @patch('src.sohnbot.runtime.agent_session.create_sohnbot_mcp_server')
     @patch('src.sohnbot.runtime.agent_session.ClaudeAgentOptions')
-    async def test_initialize_settings_mode_does_not_force_allowed_tools(
-        self, mock_options, mock_mcp, mock_sdk, agent_session
+    @patch('src.sohnbot.runtime.agent_session._load_mcp_servers_from_settings')
+    async def test_initialize_settings_mode_adds_external_mcp_tool_wildcards(
+        self, mock_load_settings_mcps, mock_options, mock_mcp, mock_sdk, agent_session
     ):
-        """settings policy mode defers tool allowlisting to Claude settings."""
+        """settings mode explicitly allowlists external MCP tools from settings."""
         mock_mcp.return_value = MagicMock()
         mock_client = AsyncMock()
         mock_sdk.return_value = mock_client
+        mock_load_settings_mcps.return_value = {
+            "statho": {"command": "node", "args": ["server.js"]},
+        }
 
-        with patch.dict("os.environ", {"SOHNBOT_MCP_POLICY_MODE": "settings"}):
+        with patch.dict(
+            "os.environ",
+            {
+                "SOHNBOT_MCP_POLICY_MODE": "settings",
+                "SOHNBOT_CLAUDE_PROJECT_ROOT": "D:/SohnBot/Instructions",
+                "SOHNBOT_LOAD_SETTINGS_MCPS": "true",
+            },
+        ):
             await agent_session.initialize()
 
         call_kwargs = mock_options.call_args.kwargs
-        assert "allowed_tools" not in call_kwargs
+        assert "allowed_tools" in call_kwargs
+        assert "mcp__statho__*" in call_kwargs["allowed_tools"]
 
     @pytest.mark.asyncio
     @patch('src.sohnbot.runtime.agent_session.ClaudeSDKClient')

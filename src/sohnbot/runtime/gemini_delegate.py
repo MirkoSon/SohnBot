@@ -70,13 +70,14 @@ async def delegate_to_gemini(prompt: str, max_tokens: int = 8000) -> str:
             "temperature": 0.7,
         }
 
+        model_name = "gemini-3-flash-preview"
         model = genai.GenerativeModel(
-            model_name='gemini-2.0-flash-exp',  # Fast and cost-effective
+            model_name=model_name,
             generation_config=generation_config
         )
 
         # Generate response
-        logger.info("gemini_generation_started", model="gemini-2.0-flash-exp")
+        logger.info("gemini_generation_started", model=model_name)
         response = await model.generate_content_async(prompt)
 
         if not response.text:

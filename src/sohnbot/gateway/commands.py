@@ -25,6 +25,7 @@ from ..persistence.notification import (
 )
 from ..persistence.operation_logs import query_operation_logs
 from ..runtime.agent_selector import get_agent_status
+from ..runtime.gemini_delegate import GeminiDelegateError, delegate_to_gemini
 
 _schedule_broker: Any = None
 
@@ -118,6 +119,24 @@ async def handle_web_research_command(chat_id: str, command_text: str) -> str:
                 lines.append(f"Fetch failed: {item.get('error', 'unknown')}")
             lines.append("")
     return "\n".join(lines).strip()
+
+
+async def handle_gemini_command(chat_id: str, command_text: str) -> str:
+    """Handle /gemini <prompt> command by calling Gemini directly (no Claude routing)."""
+    _ = chat_id  # Reserved for future per-chat controls/auditing.
+    parts = command_text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return "Usage: /gemini <prompt>\nExample: /gemini Summarize this architecture in 5 bullets."
+
+    prompt = parts[1].strip()
+    try:
+        response = await delegate_to_gemini(prompt=prompt, max_tokens=4000)
+    except GeminiDelegateError as exc:
+        return f"❌ Gemini direct request failed ({exc.code}): {exc.message}"
+    except Exception as exc:  # noqa: BLE001
+        return f"❌ Gemini direct request failed: {exc}"
+
+    return f"🤖 Gemini Direct Response:\n\n{response}"
 
 
 async def handle_notify_command(chat_id: str, command_text: str) -> str:
@@ -786,6 +805,7 @@ async def handle_help_command() -> str:
 **Web Research:**
 • `/web_research <query> [--depth=quick|deep] [--mode=fresh|static]`
   Example: `/web_research "weather in Helsinki" --depth=quick`
+• `/gemini <prompt>` - Send prompt directly to Gemini (bypasses Claude)
 
 **Natural Language:**
 You can also ask me to do things naturally:

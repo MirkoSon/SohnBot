@@ -4,6 +4,7 @@ Claude Agent SDK Session Management.
 Wrapper for ClaudeSDKClient with SohnBot-specific configuration.
 """
 
+import json
 import os
 from pathlib import Path
 import inspect
@@ -22,6 +23,99 @@ from .postponement_manager import PostponementManager
 logger = structlog.get_logger(__name__)
 
 SendMessageFn = Callable[[int, str], Awaitable[bool]]
+
+MCP_POLICY_MODE_ENV = "SOHNBOT_MCP_POLICY_MODE"
+MCP_POLICY_GOVERNED = "governed"
+MCP_POLICY_SETTINGS = "settings"
+LOAD_SETTINGS_MCPS_ENV = "SOHNBOT_LOAD_SETTINGS_MCPS"
+ENABLE_GEMINI_MCP_ENV = "SOHNBOT_ENABLE_GEMINI_MCP"
+
+
+def _mcp_policy_mode() -> str:
+    raw = (os.getenv(MCP_POLICY_MODE_ENV) or MCP_POLICY_GOVERNED).strip().lower()
+    if raw in {MCP_POLICY_GOVERNED, MCP_POLICY_SETTINGS}:
+        return raw
+    return MCP_POLICY_GOVERNED
+
+
+def _load_settings_mcps_enabled() -> bool:
+    raw = (os.getenv(LOAD_SETTINGS_MCPS_ENV) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _gemini_mcp_enabled() -> bool:
+    raw = (os.getenv(ENABLE_GEMINI_MCP_ENV) or "").strip().lower()
+    # Backward-compatible default: enabled unless explicitly disabled.
+    if not raw:
+        return True
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _load_mcp_servers_from_settings(root: str) -> dict[str, dict]:
+    """Load mcpServers maps from .claude/settings.json and settings.local.json."""
+    base = Path(root)
+    settings_files = [
+        base / ".claude" / "settings.json",
+        base / ".claude" / "settings.local.json",
+    ]
+    combined: dict[str, dict] = {}
+    for settings_path in settings_files:
+        try:
+            if not settings_path.exists():
+                continue
+            raw = json.loads(settings_path.read_text(encoding="utf-8"))
+            mcp_servers = raw.get("mcpServers")
+            if not isinstance(mcp_servers, dict):
+                continue
+            for name, spec in mcp_servers.items():
+                if isinstance(name, str) and isinstance(spec, dict):
+                    combined[name] = spec
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mcp_settings_parse_failed", path=str(settings_path), error=str(exc))
+    return combined
+
+
+def _normalize_external_mcp_spec(spec: dict) -> dict | None:
+    """Convert settings-style MCP spec into Claude SDK mcp_servers config dict."""
+    mcp_type = str(spec.get("type", "")).strip().lower()
+    command = spec.get("command")
+    url = spec.get("url")
+    args = spec.get("args", [])
+    env = spec.get("env", {})
+    headers = spec.get("headers", {})
+
+    if not isinstance(args, list):
+        args = []
+    if not isinstance(env, dict):
+        env = {}
+    if not isinstance(headers, dict):
+        headers = {}
+
+    # Infer stdio if type omitted but command is present.
+    if not mcp_type and isinstance(command, str) and command.strip():
+        mcp_type = "stdio"
+
+    if mcp_type == "stdio":
+        if not isinstance(command, str) or not command.strip():
+            return None
+        return {
+            "type": "stdio",
+            "command": command,
+            "args": [str(arg) for arg in args],
+            "env": {str(k): str(v) for k, v in env.items()},
+        }
+
+    if mcp_type in {"http", "sse"}:
+        if not isinstance(url, str) or not url.strip():
+            return None
+        normalized = {"type": mcp_type, "url": url}
+        if headers:
+            normalized["headers"] = {str(k): str(v) for k, v in headers.items()}
+        if env:
+            normalized["env"] = {str(k): str(v) for k, v in env.items()}
+        return normalized
+
+    return None
 class AgentSession:
     """Wrapper for Claude Agent SDK with SohnBot-specific configuration."""
 
@@ -66,26 +160,22 @@ class AgentSession:
 
         # Configure MCP servers
         mcp_servers = {"sohnbot": mcp_server}
+        settings_external_server_names: list[str] = []
 
         # Add external Gemini MCP server if configured
         gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         gemini_mcp_path = os.getenv("GEMINI_MCP_SERVER_PATH")
 
-        if gemini_api_key and gemini_mcp_path:
-            try:
-                from claude_agent_sdk import StdioServerParameters
-            except ImportError:
-                logger.warning(
-                    "gemini_mcp_server_skipped",
-                    reason="StdioServerParameters unavailable in installed claude_agent_sdk",
-                )
-            else:
-                mcp_servers["gemini"] = StdioServerParameters(
-                    command="npx",
-                    args=["tsx", gemini_mcp_path],
-                    env={"GEMINI_API_KEY": gemini_api_key}
-                )
-                logger.info("gemini_mcp_server_configured", path=gemini_mcp_path)
+        if _gemini_mcp_enabled() and gemini_api_key and gemini_mcp_path:
+            mcp_servers["gemini"] = {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["tsx", gemini_mcp_path],
+                "env": {"GEMINI_API_KEY": gemini_api_key},
+            }
+            logger.info("gemini_mcp_server_configured", path=gemini_mcp_path)
+        elif gemini_api_key and gemini_mcp_path:
+            logger.info("gemini_mcp_server_disabled_by_env", env=ENABLE_GEMINI_MCP_ENV)
 
         claude_project_root = (os.getenv("SOHNBOT_CLAUDE_PROJECT_ROOT") or "").strip()
         if claude_project_root:
@@ -97,48 +187,69 @@ class AgentSession:
             session_cwd = str(Path.cwd())
             logger.info("claude_project_settings_disabled")
 
+        if claude_project_root and _load_settings_mcps_enabled():
+            settings_mcps = _load_mcp_servers_from_settings(claude_project_root)
+            for name, spec in settings_mcps.items():
+                if name in mcp_servers:
+                    continue
+                normalized = _normalize_external_mcp_spec(spec)
+                if normalized is None:
+                    logger.warning("settings_mcp_server_invalid", name=name)
+                    continue
+                mcp_servers[name] = normalized
+                settings_external_server_names.append(name)
+                logger.info("settings_mcp_server_configured", name=name, type=normalized.get("type"))
+        elif claude_project_root:
+            logger.info("settings_mcp_servers_disabled", env=LOAD_SETTINGS_MCPS_ENV)
+
+        policy_mode = _mcp_policy_mode()
         # Build options
+        allowed_tools = [
+            "mcp__sohnbot__fs__read",
+            "mcp__sohnbot__fs__list",
+            "mcp__sohnbot__fs__search",
+            "mcp__sohnbot__files__read",
+            "mcp__sohnbot__files__list",
+            "mcp__sohnbot__files__search",
+            "mcp__sohnbot__fs__apply_patch",
+            "mcp__sohnbot__git__status",
+            "mcp__sohnbot__git__diff",
+            "mcp__sohnbot__git__commit",
+            "mcp__sohnbot__git__rollback",
+            "mcp__sohnbot__git__checkout",
+            "mcp__sohnbot__sched__create",
+            "mcp__sohnbot__sched__list",
+            "mcp__sohnbot__sched__disable",
+            "mcp__sohnbot__sched__enable",
+            "mcp__sohnbot__sched__delete",
+            "mcp__sohnbot__sched__edit",
+            "mcp__sohnbot__profiles__lint",
+            "mcp__sohnbot__profiles__build",
+            "mcp__sohnbot__profiles__test",
+            "mcp__sohnbot__profiles__ripgrep",
+            "mcp__sohnbot__web__search",
+            "mcp__sohnbot__web__research",
+            "mcp__sohnbot__ai__delegate_to_gemini",
+            "mcp__sohnbot__observe__status",
+            "mcp__sohnbot__observe__resources",
+            "mcp__sohnbot__observe__health",
+            "mcp__sohnbot__observe__logs",
+            "WebSearch",
+            "WebFetch",
+            "Read",
+            "Write",
+            "Edit",
+        ]
+        if policy_mode == MCP_POLICY_SETTINGS:
+            for server_name in settings_external_server_names:
+                allowed_tools.append(f"mcp__{server_name}__*")
+
         options = ClaudeAgentOptions(
             model=model,
             max_thinking_tokens=max_thinking,
             max_turns=max_turns,
             mcp_servers=mcp_servers,
-            allowed_tools=[
-                "mcp__sohnbot__fs__read",
-                "mcp__sohnbot__fs__list",
-                "mcp__sohnbot__fs__search",
-                "mcp__sohnbot__files__read",
-                "mcp__sohnbot__files__list",
-                "mcp__sohnbot__files__search",
-                "mcp__sohnbot__fs__apply_patch",
-                "mcp__sohnbot__git__status",
-                "mcp__sohnbot__git__diff",
-                "mcp__sohnbot__git__commit",
-                "mcp__sohnbot__git__rollback",
-                "mcp__sohnbot__git__checkout",
-                "mcp__sohnbot__sched__create",
-                "mcp__sohnbot__sched__list",
-                "mcp__sohnbot__sched__disable",
-                "mcp__sohnbot__sched__enable",
-                "mcp__sohnbot__sched__delete",
-                "mcp__sohnbot__sched__edit",
-                "mcp__sohnbot__profiles__lint",
-                "mcp__sohnbot__profiles__build",
-                "mcp__sohnbot__profiles__test",
-                "mcp__sohnbot__profiles__ripgrep",
-                "mcp__sohnbot__web__search",
-                "mcp__sohnbot__web__research",
-                "mcp__sohnbot__ai__delegate_to_gemini",
-                "mcp__sohnbot__observe__status",
-                "mcp__sohnbot__observe__resources",
-                "mcp__sohnbot__observe__health",
-                "mcp__sohnbot__observe__logs",
-                "WebSearch",
-                "WebFetch",
-                "Read",
-                "Write",
-                "Edit",
-            ],
+            allowed_tools=allowed_tools,
             hooks={
                 "PreToolUse": [validate_tool_use]
             },
@@ -147,9 +258,28 @@ class AgentSession:
             cwd=session_cwd,
         )
 
-        # Initialize client
-        self.client = ClaudeSDKClient(options=options)
-        await self.client.__aenter__()
+        # Initialize client, recovering to SohnBot-only MCP on external MCP startup failures.
+        try:
+            self.client = ClaudeSDKClient(options=options)
+            await self.client.__aenter__()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("agent_session_init_failed", error=str(exc), exc_info=True)
+            fallback_options = ClaudeAgentOptions(
+                model=model,
+                max_thinking_tokens=max_thinking,
+                max_turns=max_turns,
+                mcp_servers={"sohnbot": mcp_server},
+                allowed_tools=[tool for tool in allowed_tools if tool.startswith("mcp__sohnbot__") or not tool.startswith("mcp__")],
+                hooks={"PreToolUse": [validate_tool_use]},
+                setting_sources=setting_sources,
+                cwd=session_cwd,
+            )
+            self.client = ClaudeSDKClient(options=fallback_options)
+            await self.client.__aenter__()
+            logger.warning(
+                "agent_session_init_recovered_with_minimal_mcp",
+                dropped_mcp_servers=sorted([name for name in mcp_servers if name != "sohnbot"]),
+            )
         if self.enable_ambiguity_guard:
             await self.postponement_manager.recover_pending()
 

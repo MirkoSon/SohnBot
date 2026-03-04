@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import errno
 import os
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,66 @@ from .persistence.notification import enqueue_notification
 from .runtime.agent_session import AgentSession
 
 logger = structlog.get_logger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_INSTANCE_LOCK_PATH = _REPO_ROOT / "data" / "sohnbot.instance.lock"
+
+
+def _is_process_running(pid: int) -> bool:
+    """Return True if a process with PID appears to be alive."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _acquire_instance_lock() -> Path:
+    """Acquire a single-instance lock file or raise if another instance is active."""
+    _INSTANCE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = str(os.getpid())
+    try:
+        fd = os.open(str(_INSTANCE_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except OSError as exc:
+        if exc.errno != errno.EEXIST:
+            raise
+        existing_pid = -1
+        try:
+            existing_pid = int(_INSTANCE_LOCK_PATH.read_text(encoding="utf-8").strip())
+        except Exception:  # noqa: BLE001
+            existing_pid = -1
+        if _is_process_running(existing_pid):
+            raise RuntimeError(
+                f"SohnBot is already running (pid={existing_pid}). "
+                "Stop the existing instance before starting another."
+            ) from exc
+        # Stale lock; remove and retry once.
+        try:
+            _INSTANCE_LOCK_PATH.unlink()
+        except OSError:
+            pass
+        fd = os.open(str(_INSTANCE_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+    logger.info("instance_lock_acquired", path=str(_INSTANCE_LOCK_PATH), pid=os.getpid())
+    return _INSTANCE_LOCK_PATH
+
+
+def _release_instance_lock(lock_path: Path) -> None:
+    """Release instance lock file if owned by current process."""
+    try:
+        recorded = lock_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+    if recorded != str(os.getpid()):
+        return
+    try:
+        lock_path.unlink()
+        logger.info("instance_lock_released", path=str(lock_path))
+    except OSError:
+        pass
 
 
 async def initialize_heartbeat_job() -> None:
@@ -130,137 +191,140 @@ async def load_dynamic_config() -> None:
 
 async def run_main() -> None:
     """Run SohnBot with Telegram gateway and background runtime tasks."""
+    lock_path = _acquire_instance_lock()
     config = get_config_manager()
-
-    # Apply DB migrations before any runtime component reads/writes tables.
-    db_path = Path(str(config.get("database.path")))
-    if not db_path.is_absolute():
-        db_path = Path.cwd() / db_path
-    migrations_dir = Path(__file__).parent / "persistence" / "migrations"
-    apply_migrations(db_path, migrations_dir)
-
-    # Initialize global DB manager after migrations are applied.
-    db_manager = DatabaseManager(db_path)
-    set_db_manager(db_manager)
-    await db_manager.init_db()
-
-    await load_dynamic_config()
-
-    # Load telegram configuration
-    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not telegram_token:
-        logger.error("telegram_bot_token_missing", message="TELEGRAM_BOT_TOKEN environment variable not set")
-        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
-
-    # Load allowed chat IDs from config
     try:
-        raw_allowed_chat_ids = config.get("telegram.allowed_chat_ids")
-        parsed_values: list[object]
-        if isinstance(raw_allowed_chat_ids, list):
-            parsed_values = raw_allowed_chat_ids
-        elif isinstance(raw_allowed_chat_ids, str):
-            text = raw_allowed_chat_ids.strip()
-            if text.startswith("[") and text.endswith("]"):
-                try:
-                    literal = ast.literal_eval(text)
-                    parsed_values = literal if isinstance(literal, list) else [literal]
-                except (ValueError, SyntaxError):
+        # Apply DB migrations before any runtime component reads/writes tables.
+        db_path = Path(str(config.get("database.path")))
+        if not db_path.is_absolute():
+            db_path = Path.cwd() / db_path
+        migrations_dir = Path(__file__).parent / "persistence" / "migrations"
+        apply_migrations(db_path, migrations_dir)
+
+        # Initialize global DB manager after migrations are applied.
+        db_manager = DatabaseManager(db_path)
+        set_db_manager(db_manager)
+        await db_manager.init_db()
+
+        await load_dynamic_config()
+
+        # Load telegram configuration
+        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        if not telegram_token:
+            logger.error("telegram_bot_token_missing", message="TELEGRAM_BOT_TOKEN environment variable not set")
+            raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+
+        # Load allowed chat IDs from config
+        try:
+            raw_allowed_chat_ids = config.get("telegram.allowed_chat_ids")
+            parsed_values: list[object]
+            if isinstance(raw_allowed_chat_ids, list):
+                parsed_values = raw_allowed_chat_ids
+            elif isinstance(raw_allowed_chat_ids, str):
+                text = raw_allowed_chat_ids.strip()
+                if text.startswith("[") and text.endswith("]"):
+                    try:
+                        literal = ast.literal_eval(text)
+                        parsed_values = literal if isinstance(literal, list) else [literal]
+                    except (ValueError, SyntaxError):
+                        parsed_values = [part.strip() for part in text.split(",") if part.strip()]
+                else:
                     parsed_values = [part.strip() for part in text.split(",") if part.strip()]
             else:
-                parsed_values = [part.strip() for part in text.split(",") if part.strip()]
-        else:
-            parsed_values = [raw_allowed_chat_ids]
+                parsed_values = [raw_allowed_chat_ids]
 
-        allowed_chat_ids = []
-        for value in parsed_values:
-            if value is None:
-                continue
-            text = str(value).strip().strip("'\"")
-            if not text:
-                continue
-            allowed_chat_ids.append(int(text))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("telegram_allowed_chat_ids_parse_failed", error=str(exc))
-        allowed_chat_ids = []
+            allowed_chat_ids = []
+            for value in parsed_values:
+                if value is None:
+                    continue
+                text = str(value).strip().strip("'\"")
+                if not text:
+                    continue
+                allowed_chat_ids.append(int(text))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telegram_allowed_chat_ids_parse_failed", error=str(exc))
+            allowed_chat_ids = []
 
-    # Validate Claude authentication
-    has_oauth = bool(os.getenv("CLAUDE_CODE_OAUTH_TOKEN"))
-    has_api_key = bool(os.getenv("ANTHROPIC_API_KEY"))
-    if not (has_oauth or has_api_key):
-        logger.error(
-            "claude_authentication_missing",
-            message="Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY found in environment"
-        )
-        raise ValueError(
-            "Claude authentication required: set either CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env file"
-        )
-
-    # Initialize core components
-    scope_validator = ScopeValidator(allowed_roots=config.get("scope.allowed_roots"))
-    broker = BrokerRouter(scope_validator=scope_validator, config_manager=config)
-    agent_session = AgentSession(config_manager=config, broker_router=broker)
-
-    # Initialize agent session (loads Claude SDK, MCP server, hooks)
-    await agent_session.initialize()
-
-    message_router = MessageRouter(agent_session=agent_session)
-    telegram_client = TelegramClient(
-        token=telegram_token,
-        allowed_chat_ids=allowed_chat_ids,
-        message_router=message_router,
-    )
-
-    # Load background task intervals
-    interval = int(config.get("observability.collection_interval_seconds"))
-    scheduler_tick = int(config.get("scheduler.tick_seconds"))
-
-    logger.info(
-        "sohnbot_starting",
-        allowed_chat_count=len(allowed_chat_ids),
-        snapshot_interval_seconds=interval,
-        scheduler_tick_seconds=scheduler_tick,
-        auth_method="oauth" if has_oauth else "api_key",
-    )
-
-    async with asyncio.TaskGroup() as tg:
-        # Start Telegram gateway
-        tg.create_task(
-            _safe_telegram_gateway(telegram_client),
-            name="telegram-gateway",
-        )
-
-        # Start background tasks
-        tg.create_task(
-            snapshot_collector_loop(interval_seconds=interval),
-            name="snapshot-collector",
-        )
-        tg.create_task(
-            scheduler_executor_loop(tick_seconds=scheduler_tick),
-            name="scheduler-executor",
-        )
-
-        # Initialize default jobs
-        await _run_startup_step("initialize_heartbeat_job", initialize_heartbeat_job())
-        await _run_startup_step(
-            "initialize_operation_logs_cleanup_job",
-            initialize_operation_logs_cleanup_job(),
-        )
-
-        # Start HTTP observability server if enabled
-        http_enabled = bool(config.get("observability.http_enabled"))
-        if http_enabled:
-            host = str(config.get("observability.http_host"))
-            port = int(config.get("observability.http_port"))
-            tg.create_task(
-                _safe_http_server_loop(host=host, port=port),
-                name="http-observability",
+        # Validate Claude authentication
+        has_oauth = bool(os.getenv("CLAUDE_CODE_OAUTH_TOKEN"))
+        has_api_key = bool(os.getenv("ANTHROPIC_API_KEY"))
+        if not (has_oauth or has_api_key):
+            logger.error(
+                "claude_authentication_missing",
+                message="Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY found in environment"
             )
-            logger.info("http_observability_task_started", host=host, port=port)
+            raise ValueError(
+                "Claude authentication required: set either CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env file"
+            )
+
+        # Initialize core components
+        scope_validator = ScopeValidator(allowed_roots=config.get("scope.allowed_roots"))
+        broker = BrokerRouter(scope_validator=scope_validator, config_manager=config)
+        agent_session = AgentSession(config_manager=config, broker_router=broker)
+
+        # Initialize agent session (loads Claude SDK, MCP server, hooks)
+        await agent_session.initialize()
+
+        message_router = MessageRouter(agent_session=agent_session)
+        telegram_client = TelegramClient(
+            token=telegram_token,
+            allowed_chat_ids=allowed_chat_ids,
+            message_router=message_router,
+        )
+
+        # Load background task intervals
+        interval = int(config.get("observability.collection_interval_seconds"))
+        scheduler_tick = int(config.get("scheduler.tick_seconds"))
 
         logger.info(
-            "sohnbot_started",
-            http_enabled=http_enabled,
+            "sohnbot_starting",
+            allowed_chat_count=len(allowed_chat_ids),
+            snapshot_interval_seconds=interval,
+            scheduler_tick_seconds=scheduler_tick,
+            auth_method="oauth" if has_oauth else "api_key",
         )
+
+        async with asyncio.TaskGroup() as tg:
+            # Start Telegram gateway
+            tg.create_task(
+                _safe_telegram_gateway(telegram_client),
+                name="telegram-gateway",
+            )
+
+            # Start background tasks
+            tg.create_task(
+                snapshot_collector_loop(interval_seconds=interval),
+                name="snapshot-collector",
+            )
+            tg.create_task(
+                scheduler_executor_loop(tick_seconds=scheduler_tick),
+                name="scheduler-executor",
+            )
+
+            # Initialize default jobs
+            await _run_startup_step("initialize_heartbeat_job", initialize_heartbeat_job())
+            await _run_startup_step(
+                "initialize_operation_logs_cleanup_job",
+                initialize_operation_logs_cleanup_job(),
+            )
+
+            # Start HTTP observability server if enabled
+            http_enabled = bool(config.get("observability.http_enabled"))
+            if http_enabled:
+                host = str(config.get("observability.http_host"))
+                port = int(config.get("observability.http_port"))
+                tg.create_task(
+                    _safe_http_server_loop(host=host, port=port),
+                    name="http-observability",
+                )
+                logger.info("http_observability_task_started", host=host, port=port)
+
+            logger.info(
+                "sohnbot_started",
+                http_enabled=http_enabled,
+            )
+    finally:
+        _release_instance_lock(lock_path)
 
 
 async def _safe_telegram_gateway(telegram_client: TelegramClient) -> None:

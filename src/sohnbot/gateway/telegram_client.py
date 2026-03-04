@@ -5,6 +5,7 @@ Handles Telegram Bot API integration with chat ID authentication.
 """
 
 import asyncio
+import os
 from uuid import uuid4
 
 import structlog
@@ -19,6 +20,7 @@ from .commands import (
     handle_heartbeat_command,
     handle_health_command,
     handle_help_command,
+    handle_gemini_command,
     handle_logs_command,
     handle_notify_command,
     handle_schedule_command,
@@ -57,6 +59,10 @@ class TelegramClient:
         self.message_router = message_router
         self.application = None
         self.notification_worker = notification_worker
+        self.typing_indicator_enabled = (
+            os.getenv("SOHNBOT_TELEGRAM_TYPING_INDICATOR", "false").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
         max_messages_per_minute = 30
         config = getattr(getattr(message_router, "agent_session", None), "config", None)
         if config is not None:
@@ -95,6 +101,7 @@ class TelegramClient:
         self.application.add_handler(CommandHandler("dryrun", self.cmd_dryrun))
         self.application.add_handler(CommandHandler("web_research", self.cmd_web_research))
         self.application.add_handler(CommandHandler("webresearch", self.cmd_web_research))
+        self.application.add_handler(CommandHandler("gemini", self.cmd_gemini))
 
         # Start polling
         await self.application.initialize()
@@ -168,7 +175,13 @@ class TelegramClient:
                 while not typing_stop.is_set():
                     try:
                         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-                    except Exception:  # noqa: BLE001
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "telegram_typing_indicator_failed",
+                            chat_id=chat_id,
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
                         # Typing indicator is best-effort only.
                         return
                     try:
@@ -176,7 +189,8 @@ class TelegramClient:
                     except asyncio.TimeoutError:
                         continue
 
-            typing_task = asyncio.create_task(_typing_loop(), name=f"typing-{chat_id}")
+            if self.typing_indicator_enabled:
+                typing_task = asyncio.create_task(_typing_loop(), name=f"typing-{chat_id}")
 
             # Route to Claude Agent SDK runtime
             response = await self.message_router.route_to_runtime(
@@ -191,15 +205,12 @@ class TelegramClient:
                 return
 
             # Format and send response (handle 4096-char limit)
-            formatted_messages = format_for_telegram(response)
-            for msg in formatted_messages:
-                # Use plain text (no parse_mode) to avoid Markdown escaping issues
-                await update.message.reply_text(msg)
+            sent_chunks = await self._reply_text_chunks(chat_id, response)
 
             logger.info(
                 "telegram_response_sent",
                 chat_id=chat_id,
-                message_count=len(formatted_messages)
+                message_count=sent_chunks,
             )
 
         except Exception as e:
@@ -250,7 +261,7 @@ class TelegramClient:
             return
 
         response = await handle_help_command()
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_agent(self, update: Update, context):
         """Handle /agent command."""
@@ -265,7 +276,7 @@ class TelegramClient:
             return
 
         response = await handle_agent_command()
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_notify(self, update: Update, context):
         """Handle /notify on|off|status command."""
@@ -279,7 +290,7 @@ class TelegramClient:
             return
 
         response = await handle_notify_command(str(chat_id), update.message.text or "")
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_status(self, update: Update, context):
         """Handle /status [resources] command."""
@@ -293,7 +304,7 @@ class TelegramClient:
             return
 
         response = await handle_status_command(str(chat_id), update.message.text or "")
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_health(self, update: Update, context):
         """Handle /health command."""
@@ -307,7 +318,7 @@ class TelegramClient:
             return
 
         response = await handle_health_command(str(chat_id))
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_logs(self, update: Update, context):
         """Handle /logs [hours] command."""
@@ -338,7 +349,7 @@ class TelegramClient:
             update.message.text or "",
             db_path,
         )
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_schedule(self, update: Update, context):
         """Handle /schedule create <name> \"<cron_expr>\" <timezone> <action> command."""
@@ -352,7 +363,7 @@ class TelegramClient:
             return
 
         response = await handle_schedule_command(str(chat_id), update.message.text or "")
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_heartbeat(self, update: Update, context):
         """Handle /heartbeat status|configure|disable|enable command."""
@@ -366,7 +377,7 @@ class TelegramClient:
             return
 
         response = await handle_heartbeat_command(str(chat_id), update.message.text or "")
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_config(self, update: Update, context):
         """Handle /config show|set|reset command."""
@@ -380,7 +391,7 @@ class TelegramClient:
             return
 
         response = await handle_config_command(str(chat_id), update.message.text or "")
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_web_research(self, update: Update, context):
         """Handle /web_research command."""
@@ -393,7 +404,20 @@ class TelegramClient:
             return
 
         response = await handle_web_research_command(str(chat_id), update.message.text or "")
-        await update.message.reply_text(response)
+        await self._reply_text_chunks(chat_id, response)
+
+    async def cmd_gemini(self, update: Update, context):
+        """Handle /gemini command."""
+        if not update.message or not update.effective_chat:
+            return
+
+        chat_id = update.effective_chat.id
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
+            logger.warning("unauthorized_gemini_command", chat_id=chat_id)
+            return
+
+        response = await handle_gemini_command(str(chat_id), update.message.text or "")
+        await self._reply_text_chunks(chat_id, response)
 
     async def cmd_dryrun(self, update: Update, context):
         """Handle /dryrun <prompt> by routing through runtime with dry-run marker."""
@@ -421,7 +445,7 @@ class TelegramClient:
                 return
             formatted_messages = format_for_telegram(response)
             for msg in formatted_messages:
-                await update.message.reply_text(msg)
+                await self._reply_text_chunks(chat_id, msg)
         except Exception as e:
             logger.error(
                 "dryrun_message_handling_error",
@@ -430,6 +454,18 @@ class TelegramClient:
                 error_type=type(e).__name__,
             )
             await update.message.reply_text("❌ An error occurred processing your dry-run request.")
+
+    async def _reply_text_chunks(self, chat_id: int, text: str) -> int:
+        """Send text to Telegram chat safely under message size limits."""
+        chunks = format_for_telegram(text or "")
+        sent = 0
+        for chunk in chunks:
+            if not chunk:
+                continue
+            await self._rate_limiter.acquire()
+            await self.application.bot.send_message(chat_id=chat_id, text=chunk)
+            sent += 1
+        return sent
 
     async def send_message(self, chat_id: int, text: str) -> bool:
         """
@@ -443,11 +479,7 @@ class TelegramClient:
             True if successful, False otherwise
         """
         try:
-            await self._rate_limiter.acquire()
-            await self.application.bot.send_message(
-                chat_id=chat_id,
-                text=text
-            )
+            await self._reply_text_chunks(chat_id, text)
             logger.info("notification_sent", chat_id=chat_id)
             return True
         except Exception as e:
