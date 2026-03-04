@@ -17,11 +17,14 @@ from tkinter import messagebox, ttk
 
 
 class SohnBotControlGUI:
+    _COLLAPSED_GEOMETRY = "600x220"
+    _EXPANDED_GEOMETRY = "960x620"
+
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("SohnBot Control")
-        self.root.geometry("480x190")
-        self.root.resizable(False, False)
+        self.root.geometry(self._COLLAPSED_GEOMETRY)
+        self.root.resizable(True, True)
 
         self.process: subprocess.Popen[str] | None = None
         self.repo_root = Path(__file__).resolve().parent.parent
@@ -30,11 +33,12 @@ class SohnBotControlGUI:
 
         self.status_var = tk.StringVar(value="Status: Stopped")
         self.pid_var = tk.StringVar(value="PID: -")
+        self.logs_button_var = tk.StringVar(value="Show Logs")
 
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.log_lines: list[str] = []
-        self.log_window: tk.Toplevel | None = None
         self.log_text: tk.Text | None = None
+        self.logs_visible = False
 
         frame = ttk.Frame(self.root, padding=14)
         frame.pack(fill=tk.BOTH, expand=True)
@@ -60,7 +64,7 @@ class SohnBotControlGUI:
         self.restart_button = ttk.Button(buttons, text="Restart", width=10, command=self.restart_bot)
         self.restart_button.grid(row=0, column=2, padx=(0, 8))
 
-        self.logs_button = ttk.Button(buttons, text="Logs", width=10, command=self.open_logs_window)
+        self.logs_button = ttk.Button(buttons, textvariable=self.logs_button_var, width=10, command=self.toggle_logs)
         self.logs_button.grid(row=0, column=3)
 
         note = ttk.Label(
@@ -70,6 +74,26 @@ class SohnBotControlGUI:
             foreground="#555555",
         )
         note.pack(anchor="w", pady=(14, 0))
+
+        self.logs_container = ttk.Frame(frame)
+
+        text_frame = ttk.Frame(self.logs_container)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.log_text = tk.Text(text_frame, wrap="none", font=("Consolas", 10))
+        y_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.log_text.yview)
+        x_scroll = ttk.Scrollbar(text_frame, orient="horizontal", command=self.log_text.xview)
+        self.log_text.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
+        self.log_text.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        text_frame.rowconfigure(0, weight=1)
+        text_frame.columnconfigure(0, weight=1)
+
+        actions = ttk.Frame(self.logs_container)
+        actions.pack(fill=tk.X, pady=(8, 0))
+
+        ttk.Button(actions, text="Clear", command=self.clear_logs).pack(side=tk.LEFT)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.refresh_ui()
@@ -251,14 +275,19 @@ class SohnBotControlGUI:
             return False, "Automatic kill prompt is only implemented for Windows."
         errors: list[str] = []
         for pid in pids:
-            result = subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
+            try:
+                result = subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                    timeout=8,
+                )
+            except subprocess.TimeoutExpired:
+                errors.append(f"PID {pid}: taskkill timed out after 8s")
+                continue
             if result.returncode != 0:
                 stderr = (result.stderr or "").strip()
                 stdout = (result.stdout or "").strip()
@@ -278,6 +307,11 @@ class SohnBotControlGUI:
             self.log_text.insert(tk.END, line + "\n")
             self.log_text.see(tk.END)
 
+    def clear_logs(self) -> None:
+        self.log_lines.clear()
+        if self.log_text is not None:
+            self.log_text.delete("1.0", tk.END)
+
     def _drain_log_queue(self) -> None:
         while True:
             try:
@@ -286,15 +320,14 @@ class SohnBotControlGUI:
                 break
             self._append_log(line)
 
-    def _start_log_reader(self) -> None:
-        if self.process is None or self.process.stdout is None:
+    def _start_log_reader(self, process: subprocess.Popen[str]) -> None:
+        if process.stdout is None:
             return
 
-        def _reader() -> None:
-            assert self.process is not None
-            assert self.process.stdout is not None
+        def _reader(proc: subprocess.Popen[str]) -> None:
+            assert proc.stdout is not None
             try:
-                for raw in self.process.stdout:
+                for raw in proc.stdout:
                     line = raw.rstrip("\n")
                     self.log_queue.put(line)
                     self._write_launcher_log(line)
@@ -302,7 +335,7 @@ class SohnBotControlGUI:
                 self.log_queue.put(f"[log-reader-error] {exc}")
                 self._write_launcher_log(f"[log-reader-error] {exc}")
 
-        threading.Thread(target=_reader, daemon=True).start()
+        threading.Thread(target=_reader, args=(process,), daemon=True).start()
 
     def start_bot(self, interactive: bool = True) -> None:
         if self.process and self.process.poll() is None:
@@ -438,7 +471,7 @@ class SohnBotControlGUI:
             bufsize=1,
         )
         self._append_log(f"Starting SohnBot (PID {self.process.pid})")
-        self._start_log_reader()
+        self._start_log_reader(self.process)
 
         self.status_var.set("Status: Running")
         self.pid_var.set(f"PID: {self.process.pid}")
@@ -482,53 +515,23 @@ class SohnBotControlGUI:
         self.stop_bot()
         self.start_bot()
 
-    def open_logs_window(self) -> None:
-        if self.log_window is not None and self.log_window.winfo_exists():
-            self.log_window.lift()
-            self.log_window.focus_force()
+    def toggle_logs(self) -> None:
+        if self.logs_visible:
+            self.logs_container.pack_forget()
+            self.logs_visible = False
+            self.logs_button_var.set("Show Logs")
+            self.root.geometry(self._COLLAPSED_GEOMETRY)
             return
 
-        self.log_window = tk.Toplevel(self.root)
-        self.log_window.title("SohnBot Logs")
-        self.log_window.geometry("900x520")
-
-        container = ttk.Frame(self.log_window, padding=10)
-        container.pack(fill=tk.BOTH, expand=True)
-
-        text_frame = ttk.Frame(container)
-        text_frame.pack(fill=tk.BOTH, expand=True)
-
-        self.log_text = tk.Text(text_frame, wrap="none", font=("Consolas", 10))
-        y_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.log_text.yview)
-        x_scroll = ttk.Scrollbar(text_frame, orient="horizontal", command=self.log_text.xview)
-        self.log_text.configure(yscrollcommand=y_scroll.set, xscrollcommand=x_scroll.set)
-
-        self.log_text.grid(row=0, column=0, sticky="nsew")
-        y_scroll.grid(row=0, column=1, sticky="ns")
-        x_scroll.grid(row=1, column=0, sticky="ew")
-        text_frame.rowconfigure(0, weight=1)
-        text_frame.columnconfigure(0, weight=1)
-
-        for line in self.log_lines:
-            self.log_text.insert(tk.END, line + "\n")
-        self.log_text.see(tk.END)
-
-        actions = ttk.Frame(container)
-        actions.pack(fill=tk.X, pady=(10, 0))
-
-        def clear_logs() -> None:
-            self.log_lines.clear()
-            if self.log_text is not None:
-                self.log_text.delete("1.0", tk.END)
-
-        ttk.Button(actions, text="Clear", command=clear_logs).pack(side=tk.LEFT)
-        ttk.Button(actions, text="Close", command=self.log_window.destroy).pack(side=tk.RIGHT)
-
-        def on_logs_close() -> None:
-            self.log_window = None
-            self.log_text = None
-
-        self.log_window.protocol("WM_DELETE_WINDOW", lambda: (on_logs_close(), self.log_window.destroy()))
+        self.logs_container.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        self.logs_visible = True
+        self.logs_button_var.set("Hide Logs")
+        self.root.geometry(self._EXPANDED_GEOMETRY)
+        if self.log_text is not None:
+            self.log_text.delete("1.0", tk.END)
+            for line in self.log_lines:
+                self.log_text.insert(tk.END, line + "\n")
+            self.log_text.see(tk.END)
 
     def poll_process(self) -> None:
         self._drain_log_queue()
