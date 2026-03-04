@@ -16,6 +16,7 @@ from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 from structlog.contextvars import bind_contextvars
 
 from ..persistence.audit import log_operation_end, log_operation_start
+from .gemini_adapter_mcp import create_gemini_adapter_mcp_server
 from .hooks import validate_tool_use
 from .mcp_tools import create_sohnbot_mcp_server
 from .postponement_manager import PostponementManager
@@ -29,6 +30,7 @@ MCP_POLICY_GOVERNED = "governed"
 MCP_POLICY_SETTINGS = "settings"
 LOAD_SETTINGS_MCPS_ENV = "SOHNBOT_LOAD_SETTINGS_MCPS"
 ENABLE_GEMINI_MCP_ENV = "SOHNBOT_ENABLE_GEMINI_MCP"
+ENABLE_GEMINI_ADAPTER_ENV = "SOHNBOT_ENABLE_GEMINI_ADAPTER"
 
 
 def _mcp_policy_mode() -> str:
@@ -45,7 +47,15 @@ def _load_settings_mcps_enabled() -> bool:
 
 def _gemini_mcp_enabled() -> bool:
     raw = (os.getenv(ENABLE_GEMINI_MCP_ENV) or "").strip().lower()
-    # Backward-compatible default: enabled unless explicitly disabled.
+    # Default off: raw Gemini MCP schemas may be incompatible with Claude Agent SDK.
+    if not raw:
+        return False
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _gemini_adapter_enabled() -> bool:
+    raw = (os.getenv(ENABLE_GEMINI_ADAPTER_ENV) or "").strip().lower()
+    # Default on: adapter exposes Claude-safe schemas.
     if not raw:
         return True
     return raw in {"1", "true", "yes", "on"}
@@ -162,11 +172,18 @@ class AgentSession:
         mcp_servers = {"sohnbot": mcp_server}
         settings_external_server_names: list[str] = []
 
-        # Add external Gemini MCP server if configured
+        # Add Gemini adapter (Claude-safe MCP schemas) when API key exists.
         gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         gemini_mcp_path = os.getenv("GEMINI_MCP_SERVER_PATH")
 
-        if _gemini_mcp_enabled() and gemini_api_key and gemini_mcp_path:
+        if _gemini_adapter_enabled() and gemini_api_key:
+            mcp_servers["gemini_adapter"] = create_gemini_adapter_mcp_server()
+            logger.info("gemini_adapter_mcp_server_configured")
+        elif gemini_api_key:
+            logger.info("gemini_adapter_mcp_server_disabled_by_env", env=ENABLE_GEMINI_ADAPTER_ENV)
+
+        # Raw external Gemini MCP is optional and disabled by default.
+        if _gemini_mcp_enabled() and gemini_mcp_path and gemini_api_key:
             mcp_servers["gemini"] = {
                 "type": "stdio",
                 "command": "npx",
@@ -234,6 +251,7 @@ class AgentSession:
             "mcp__sohnbot__observe__resources",
             "mcp__sohnbot__observe__health",
             "mcp__sohnbot__observe__logs",
+            "mcp__gemini_adapter__generate",
             "WebSearch",
             "WebFetch",
             "Read",

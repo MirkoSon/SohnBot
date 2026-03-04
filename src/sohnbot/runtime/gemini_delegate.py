@@ -70,7 +70,7 @@ async def delegate_to_gemini(prompt: str, max_tokens: int = 8000) -> str:
             "temperature": 0.7,
         }
 
-        model_name = "gemini-3-flash-preview"
+        model_name = (os.getenv("SOHNBOT_GEMINI_MODEL") or "gemini-3-flash-preview").strip()
         model = genai.GenerativeModel(
             model_name=model_name,
             generation_config=generation_config

@@ -37,6 +37,8 @@ def _mcp_policy_mode() -> str:
 def _is_allowed_mcp_tool(tool_name: str, mode: str) -> bool:
     if tool_name.startswith("mcp__sohnbot__"):
         return True
+    if tool_name.startswith("mcp__gemini_adapter__"):
+        return True
     if mode == MCP_POLICY_SETTINGS and tool_name.startswith("mcp__"):
         return True
     return False
